@@ -512,11 +512,16 @@ ORDER BY total_orders DESC;
 -- Function to update product quantity after invoice
 CREATE OR REPLACE FUNCTION update_product_quantity()
 RETURNS TRIGGER AS $$
+DECLARE
+  invoice_type VARCHAR;
 BEGIN
-  IF NEW.type = 'sale' THEN
+  -- Get the invoice type from the related invoice
+  SELECT type INTO invoice_type FROM invoices WHERE id = NEW.invoice_id;
+  
+  IF invoice_type = 'sale' THEN
     UPDATE products SET current_quantity = current_quantity - NEW.quantity
     WHERE id = NEW.product_id;
-  ELSIF NEW.type IN ('purchase', 'stock') THEN
+  ELSIF invoice_type IN ('purchase', 'stock') THEN
     UPDATE products SET current_quantity = current_quantity + NEW.quantity
     WHERE id = NEW.product_id;
   END IF;

@@ -51,7 +51,7 @@ import { supabase, getProducts, getStores } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface Product {
-  id: number;
+  id: string;
   name: string;
   barcode: string;
   brand: string;
@@ -127,6 +127,7 @@ export default function POS() {
   const [clientName, setClientName] = useState('');
   const [paymentDialog, setPaymentDialog] = useState(false);
   const [receivedAmount, setReceivedAmount] = useState(0);
+  const [editableTotal, setEditableTotal] = useState(0);
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
   const [printConfirmationDialog, setPrintConfirmationDialog] = useState(false);
@@ -164,7 +165,7 @@ export default function POS() {
       const data = await getProducts();
       const formattedData = data.map((p: any) => ({
         ...p,
-        id: typeof p.id === 'string' ? parseInt(p.id) : p.id,
+        id: p.id || '',
         buying_price: p.buying_price || 0,
         selling_price: p.selling_price || 0,
         margin_percent: p.margin_percent || 0,
@@ -294,7 +295,7 @@ export default function POS() {
     if (searchInputRef.current) searchInputRef.current.focus();
   };
 
-  const updateQuantity = (productId: number, newQuantity: number) => {
+  const updateQuantity = (productId: string, newQuantity: number) => {
     const productInStock = products.find(p => p.id === productId);
     if (!productInStock) return;
 
@@ -319,7 +320,7 @@ export default function POS() {
     ));
   };
 
-  const updateDiscount = (productId: number, discount: number) => {
+  const updateDiscount = (productId: string, discount: number) => {
     setCart(cart.map(item => 
       item.product.id === productId 
         ? { ...item, discount, total: item.quantity * item.product.selling_price * (1 - discount / 100) }
@@ -327,7 +328,7 @@ export default function POS() {
     ));
   };
 
-  const removeFromCart = (productId: number) => {
+  const removeFromCart = (productId: string) => {
     setCart(cart.filter(item => item.product.id !== productId));
   };
 
@@ -347,10 +348,11 @@ export default function POS() {
         subtotal: subtotal,
         tax_amount: 0,
         discount_amount: totalDiscount + globalDiscountAmount,
-        total_amount: total,
-        status: receivedAmount >= total ? 'paid' : 'pending',
+        total_amount: editableTotal,
+        amount_paid: receivedAmount,
+        status: receivedAmount >= editableTotal ? 'paid' : 'pending',
         payment_method: receivedAmount > 0 ? 'cash' : null,
-        payment_date: receivedAmount >= total ? new Date().toISOString() : null,
+        payment_date: receivedAmount >= editableTotal ? new Date().toISOString() : null,
         invoice_date: new Date().toISOString(),
         notes: `Discount: ${totalDiscount} + Global: ${globalDiscountAmount}`
       };
@@ -382,10 +384,10 @@ export default function POS() {
         id: createdInvoice.id,
         type: 'sale',
         clientId: clientName,
-        total,
+        total: editableTotal,
         amount_paid: receivedAmount,
         created_at: new Date().toISOString(),
-        items: items as SaleInvoiceItem[]
+        items: items as any
       };
 
       setLastSaleInvoice(fetchedInvoice);
@@ -830,7 +832,11 @@ export default function POS() {
                     </div>
 
                     <Button 
-                      onClick={() => setPaymentDialog(true)}
+                      onClick={() => {
+                        setPaymentDialog(true);
+                        setEditableTotal(total);
+                        setReceivedAmount(0);
+                      }}
                       className="w-full bg-white text-emerald-600 hover:bg-white/90 font-bold text-base h-12 rounded-lg shadow-lg"
                     >
                       <CreditCard className={`${isRTL ? 'ml-2' : 'mr-2'} h-5 w-5`} />
@@ -851,12 +857,21 @@ export default function POS() {
             <DialogTitle className="flex items-center gap-2 text-2xl">
               💵 {language === 'ar' ? 'إتمام الدفع' : 'Finaliser le Paiement'}
             </DialogTitle>
-            <DialogDescription className="text-base">
-              {language === 'ar' ? `الإجمالي المطلوب: ${formatCurrencyLocal(total, language)}` : `Total à payer: ${formatCurrencyLocal(total, language)}`}
-            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            <div>
+              <Label htmlFor="editableTotal" className="font-bold text-slate-700 dark:text-slate-300">{language === 'ar' ? '💰 المبلغ الإجمالي' : '💰 Total à payer'}</Label>
+              <Input
+                id="editableTotal"
+                type="number"
+                value={editableTotal}
+                onChange={(e) => setEditableTotal(Number(e.target.value))}
+                placeholder={language === 'ar' ? 'المبلغ الإجمالي' : 'Total à payer'}
+                className="mt-2 border-2 border-blue-300 dark:border-blue-700 focus:border-blue-500 dark:focus:border-blue-500 h-12 text-lg font-bold"
+              />
+            </div>
+
             <div>
               <Label htmlFor="receivedAmount" className="font-bold text-slate-700 dark:text-slate-300">{language === 'ar' ? '💳 المبلغ المستلم' : '💳 Montant reçu'}</Label>
               <Input
@@ -870,7 +885,7 @@ export default function POS() {
             </div>
             
             <Button
-              onClick={() => setReceivedAmount(total)}
+              onClick={() => setReceivedAmount(editableTotal)}
               variant="outline"
               className="w-full border-2 border-green-300 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-900/30 h-12 font-bold"
             >
@@ -883,20 +898,20 @@ export default function POS() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className={`rounded-lg p-4 font-bold text-center text-lg ${
-                  remainingDebt > 0
+                  editableTotal - receivedAmount > 0
                     ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
                     : 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
                 }`}
               >
-                {remainingDebt > 0 ? (
+                {editableTotal - receivedAmount > 0 ? (
                   <>
                     <p>{language === 'ar' ? '⚠️ المبلغ المتبقي' : '⚠️ Reste à payer'}</p>
-                    <p className="text-2xl mt-1">{formatCurrencyLocal(remainingDebt, language)}</p>
+                    <p className="text-2xl mt-1">{formatCurrencyLocal(editableTotal - receivedAmount, language)}</p>
                   </>
                 ) : (
                   <>
                     <p>✅ {language === 'ar' ? 'الباقي' : 'Monnaie'}</p>
-                    <p className="text-2xl mt-1">{formatCurrencyLocal(Math.abs(change), language)}</p>
+                    <p className="text-2xl mt-1">{formatCurrencyLocal(Math.abs(receivedAmount - editableTotal), language)}</p>
                   </>
                 )}
               </motion.div>
