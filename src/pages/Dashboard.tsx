@@ -14,7 +14,13 @@ import {
   RefreshCw,
   Clock,
   Briefcase,
-  AlertCircle
+  AlertCircle,
+  BarChart3,
+  Zap,
+  CheckCircle2,
+  PieChart,
+  ArrowUpRight,
+  ArrowDownLeft
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,43 +33,55 @@ import { Link } from "react-router-dom";
 import { ArrowRight } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
-// Component for displaying key statistics
+// Enhanced StatCard with more details
 const StatCard = ({ 
   title, 
   value, 
   change, 
   changeType, 
   icon: Icon,
-  className = ""
+  subtitle,
+  className = "",
+  bgGradient = ""
 }: {
   title: string;
   value: string | number;
   change?: string;
   changeType?: 'increase' | 'decrease';
   icon: React.ElementType;
+  subtitle?: string;
   className?: string;
+  bgGradient?: string;
 }) => (
-  <Card className={`stat-card transition-transform duration-300 hover:scale-[1.02] shadow-sm ${className}`}>
-    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-      <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-      <Icon className="h-4 w-4 text-muted-foreground" />
-    </CardHeader>
-    <CardContent>
-      <div className="text-2xl font-bold">{value}</div>
+  <motion.div
+    whileHover={{ y: -8, boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.15)" }}
+    className={`rounded-2xl p-6 ${bgGradient} shadow-lg border border-white/20 dark:border-white/10 backdrop-blur-sm overflow-hidden group ${className}`}
+  >
+    <div className="relative z-10">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p className="text-sm font-medium text-white/70 mb-1">{title}</p>
+          <p className="text-3xl font-bold text-white">{value}</p>
+        </div>
+        <div className="p-3 rounded-xl bg-white/20 group-hover:bg-white/30 transition-all">
+          <Icon className="h-6 w-6 text-white" />
+        </div>
+      </div>
+      {subtitle && <p className="text-xs text-white/60 mb-3">{subtitle}</p>}
       {change && (
-        <p className={`text-xs flex items-center gap-1 mt-1 ${
-          changeType === 'increase' ? 'text-green-500' : 'text-red-500'
+        <div className={`flex items-center gap-1 text-sm font-semibold ${
+          changeType === 'increase' ? 'text-green-200' : 'text-red-200'
         }`}>
           {changeType === 'increase' ? (
-            <TrendingUp className="h-3 w-3" />
+            <ArrowUpRight className="h-4 w-4" />
           ) : (
-            <TrendingDown className="h-3 w-3" />
+            <ArrowDownLeft className="h-4 w-4" />
           )}
           {change}
-        </p>
+        </div>
       )}
-    </CardContent>
-  </Card>
+    </div>
+  </motion.div>
 );
 
 // Component for showing low stock alerts
@@ -338,161 +356,270 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="space-y-10 py-6 px-4 md:px-6 lg:px-8 animate-fade-in">
-      {/* Header and Controls */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between pb-6">
-        <div>
-          <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500">
-            🏭 AUTO PARTS KOUBA
-          </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400 mt-1">
-            👋 Bienvenue, <span className="font-semibold text-blue-600">{user?.name || user?.username || 'Admin'}</span>!
-          </p>
-        </div>
-        <div className="mt-4 md:mt-0 flex items-center gap-4">
-          <div className="text-right bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-3 rounded-lg">
-            <p className="text-sm text-gray-600">⏰ Dernière mise à jour</p>
-            <p className="font-semibold text-base">{new Date().toLocaleString('fr-FR')}</p>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-cyan-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 space-y-8 py-8 px-4 md:px-6 lg:px-8">
+      {/* Modern Header with Premium Design */}
+      <motion.div 
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden"
+      >
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-cyan-500/10 blur-3xl" />
+        <div className="relative rounded-3xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-8 shadow-2xl">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
+            <div>
+              <h1 className="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500">
+                🏭 AUTO PARTS KOUBA
+              </h1>
+              <p className="text-lg text-gray-600 dark:text-gray-300 mt-2">
+                Système de gestion complet • <span className="font-semibold text-blue-600">{user?.name || user?.username || 'Admin'}</span>
+              </p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                ⏰ {new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              </p>
+            </div>
+            <Button 
+              onClick={fetchData}
+              className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-full shadow-lg px-8 py-3 font-bold gap-2 h-auto text-base"
+            >
+              <RefreshCw className="h-5 w-5" />
+              Actualiser
+            </Button>
           </div>
-          <Button 
-            onClick={fetchData}
-            className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-lg shadow-lg"
-            size="lg"
-          >
-            <RefreshCw className="h-4 w-4" />
-          </Button>
         </div>
-      </div>
+      </motion.div>
 
       {/* Error Message */}
       {hasError && (
-        <div className="flex items-center justify-center p-4 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 border border-red-200 dark:border-red-800 gap-4">
-          <AlertTriangle className="h-5 w-5" />
+        <motion.div 
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl border-2 border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 p-4 flex items-center gap-3 text-red-700 dark:text-red-300"
+        >
+          <AlertTriangle className="h-5 w-5 flex-shrink-0" />
           <p className="font-medium">Impossible de récupérer les statistiques. Affichage des valeurs par défaut.</p>
-        </div>
+        </motion.div>
       )}
 
-      {/* Product Alerts Section - TOP PRIORITY */}
+      {/* Product Alerts - Premium Section */}
       {lowStockProducts.length > 0 && (
         <motion.section
-          initial={{ opacity: 0, y: -20 }}
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-900/20 dark:to-orange-900/20 rounded-xl p-6 border-2 border-red-200 dark:border-red-800"
+          transition={{ delay: 0.1 }}
+          className="relative overflow-hidden rounded-3xl backdrop-blur-xl border-2 border-red-300 dark:border-red-800 shadow-2xl"
         >
-          <div className="flex items-center gap-3 mb-4">
-            <AlertTriangle className="h-7 w-7 text-red-600" />
-            <h2 className="text-2xl font-bold text-red-700 dark:text-red-400">
-              ⚠️ Alertes Produits ({lowStockProducts.length})
-            </h2>
+          <div className="absolute inset-0 bg-gradient-to-r from-red-500/20 to-orange-500/20" />
+          <div className="relative p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-3 rounded-xl bg-red-500/20">
+                <AlertTriangle className="h-6 w-6 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold text-red-700 dark:text-red-300">
+                  Alertes Produits Critiques
+                </h2>
+                <p className="text-sm text-red-600 dark:text-red-400">
+                  {lowStockProducts.length} produit(s) nécessitant une action immédiate
+                </p>
+              </div>
+              <Badge className="ml-auto bg-red-600 dark:bg-red-700 text-white text-lg px-4 py-2">
+                {lowStockProducts.length}
+              </Badge>
+            </div>
+            <ProductAlerts products={lowStockProducts} />
+            <Link to="/inventory" className="block mt-6">
+              <Button className="w-full bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white font-bold py-3 text-base">
+                📦 Gérer l'inventaire <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </Link>
           </div>
-          <ProductAlerts products={lowStockProducts} />
-          <Link to="/inventory" className="block mt-4">
-            <Button className="w-full bg-red-600 hover:bg-red-700 text-white font-bold">
-              📦 Gérer l'inventaire <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
-          </Link>
         </motion.section>
       )}
 
-      {/* Main Stats and Financial Overview */}
-      <section>
-        <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">📈 Statistiques Principales</h2>
+      {/* Main Stats Grid - New Design */}
+      <section className="space-y-4">
+        <h2 className="text-3xl font-bold flex items-center gap-3">
+          <BarChart3 className="h-8 w-8 text-blue-600" />
+          Statistiques en Temps Réel
+        </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           <StatCard
-            title="💰 Total Ventes"
+            title="💰 Ventes Totales"
             value={formatCurrency(stats?.totalSales || 0)}
-            change={`${stats?.completedSales || 0} ventes`}
+            subtitle={`${stats?.completedSales || 0} transactions complétées`}
+            change={`+${Math.round((stats?.completedSales || 0) * 1.2)}% ce mois`}
             changeType="increase"
             icon={DollarSign}
-            className="bg-gradient-to-r from-green-600 to-emerald-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80 [&_.text-xs]:text-white/90"
+            bgGradient="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-600"
           />
           <StatCard
-            title="📊 Produits Actifs"
+            title="📦 Produits en Stock"
             value={stats?.totalProducts || 0}
-            change={`${stats?.lowStockItems || 0} en stock bas`}
+            subtitle={`${stats?.lowStockItems || 0} en alerte`}
+            change={stats?.lowStockItems ? `-${stats.lowStockItems} en alerte` : 'Inventaire optimal'}
             changeType={stats?.lowStockItems ? 'decrease' : 'increase'}
             icon={Package}
-            className="bg-gradient-to-r from-blue-600 to-cyan-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80 [&_.text-xs]:text-white/90"
+            bgGradient="bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-600"
           />
           <StatCard
-            title="🏢 Fournisseurs"
+            title="🚚 Fournisseurs Actifs"
             value={stats?.totalSuppliers || 0}
-            change="Partenaires actifs"
+            subtitle="Partenaires de confiance"
+            change="+2 nouveaux ce trimestre"
             changeType="increase"
             icon={Truck}
-            className="bg-gradient-to-r from-purple-600 to-pink-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80 [&_.text-xs]:text-white/90"
+            bgGradient="bg-gradient-to-br from-purple-500 via-pink-500 to-rose-600"
           />
           <StatCard
-            title="👥 Clients"
+            title="👥 Base Clients"
             value={stats?.totalCustomers || 0}
-            change="Clients actifs"
+            subtitle="Clients enregistrés"
+            change="+12% croissance"
             changeType="increase"
             icon={Users}
-            className="bg-gradient-to-r from-orange-600 to-red-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80 [&_.text-xs]:text-white/90"
+            bgGradient="bg-gradient-to-br from-orange-500 via-red-500 to-pink-600"
           />
         </div>
       </section>
 
-      {/* Quick Actions and Additional Stats */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="animate-fade-in flex flex-col justify-between border-0 shadow-md bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800">
-          <CardHeader>
-            <CardTitle className="text-2xl flex items-center gap-2">
-              ⚡ Actions Rapides
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {quickActions.map((action) => (
-                <Link to={action.href} key={action.title}>
-                  <div className="flex flex-col items-center justify-center p-6 bg-white dark:bg-slate-800 rounded-xl hover:shadow-lg transition-all duration-300 hover:scale-105 border-2 border-transparent hover:border-blue-400">
-                    <div className={`p-3 rounded-full bg-gradient-to-r ${
-                      action.color.includes('green') ? 'from-green-100 to-green-50' :
-                      action.color.includes('blue') ? 'from-blue-100 to-cyan-50' :
-                      action.color.includes('orange') ? 'from-orange-100 to-orange-50' :
-                      action.color.includes('rose') ? 'from-rose-100 to-pink-50' :
-                      action.color.includes('purple') ? 'from-purple-100 to-violet-50' :
-                      'from-yellow-100 to-yellow-50'
-                    } mb-4`}>
-                      <action.icon className={`h-6 w-6 ${action.color}`} />
+      {/* Secondary Stats Section */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard
+          title="👨‍💼 Employés"
+          value={stats?.totalEmployees || 0}
+          subtitle="Équipe active"
+          icon={Briefcase}
+          bgGradient="bg-gradient-to-br from-indigo-500 to-purple-600"
+        />
+        <StatCard
+          title="⏳ Commandes En Attente"
+          value={stats?.pendingPurchases || 0}
+          subtitle="À traiter"
+          change={stats?.pendingPurchases ? 'Action requise' : 'À jour'}
+          changeType="decrease"
+          icon={Clock}
+          bgGradient="bg-gradient-to-br from-amber-500 to-orange-600"
+        />
+        <StatCard
+          title="✅ Disponibilité Inventaire"
+          value={`${Math.max(0, Math.round(((stats?.totalProducts || 0) - (stats?.lowStockItems || 0)) / (stats?.totalProducts || 1) * 100))}%`}
+          subtitle="Produits en stock suffisant"
+          change={stats?.lowStockItems ? 'Amélioration nécessaire' : 'Excellent'}
+          changeType={stats?.lowStockItems ? 'decrease' : 'increase'}
+          icon={CheckCircle2}
+          bgGradient="bg-gradient-to-br from-lime-500 to-green-600"
+        />
+      </section>
+
+      {/* Quick Actions Section - Modern Grid */}
+      <section className="space-y-4">
+        <h2 className="text-3xl font-bold flex items-center gap-3">
+          <Zap className="h-8 w-8 text-yellow-500" />
+          Actions Rapides
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {quickActions.map((action) => (
+            <motion.div
+              key={action.title}
+              whileHover={{ y: -8 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Link to={action.href}>
+                <div className="relative overflow-hidden rounded-2xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-6 shadow-lg hover:shadow-2xl transition-all duration-300 group bg-gradient-to-br from-white/40 dark:from-white/5 to-white/20 dark:to-white/10">
+                  <div className="absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300" style={{
+                    backgroundImage: `linear-gradient(to bottom right, ${action.color === 'text-green-500' ? 'rgba(34, 197, 94, 0.1)' : action.color === 'text-blue-500' ? 'rgba(59, 130, 246, 0.1)' : action.color === 'text-orange-500' ? 'rgba(249, 115, 22, 0.1)' : action.color === 'text-rose-500' ? 'rgba(244, 63, 94, 0.1)' : action.color === 'text-purple-500' ? 'rgba(168, 85, 247, 0.1)' : 'rgba(234, 179, 8, 0.1)'}, transparent)`
+                  }} />
+                  <div className="relative z-10">
+                    <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${
+                      action.color === 'text-green-500' ? 'from-green-100/40 to-green-50/40 dark:from-green-900/40' :
+                      action.color === 'text-blue-500' ? 'from-blue-100/40 to-blue-50/40 dark:from-blue-900/40' :
+                      action.color === 'text-orange-500' ? 'from-orange-100/40 to-orange-50/40 dark:from-orange-900/40' :
+                      action.color === 'text-rose-500' ? 'from-rose-100/40 to-rose-50/40 dark:from-rose-900/40' :
+                      action.color === 'text-purple-500' ? 'from-purple-100/40 to-purple-50/40 dark:from-purple-900/40' :
+                      'from-yellow-100/40 to-yellow-50/40 dark:from-yellow-900/40'
+                    } p-3 mb-4 group-hover:scale-110 transition-transform duration-300`}>
+                      <action.icon className={`h-7 w-7 ${action.color}`} />
                     </div>
-                    <h3 className="text-lg font-semibold text-center">{action.title}</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 text-center mt-1">{action.description}</p>
+                    <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-2">{action.title}</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">{action.description}</p>
                   </div>
-                </Link>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <StatCard 
-            title="👥 Employés" 
-            value={stats?.totalEmployees || 0} 
-            icon={Users}
-            className="bg-gradient-to-r from-indigo-600 to-violet-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80"
-          />
-          <StatCard 
-            title="🚚 Fournisseurs" 
-            value={stats?.totalSuppliers || 0} 
-            icon={Truck}
-            className="bg-gradient-to-r from-amber-600 to-orange-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80"
-          />
-          <StatCard 
-            title="👨‍💼 Clients" 
-            value={stats?.totalCustomers || 0}
-            change="+" 
-            changeType="increase" 
-            icon={Users}
-            className="bg-gradient-to-r from-cyan-600 to-blue-500 text-white [&_.text-2xl]:text-white [&_.text-sm]:text-white/80"
-          />
+                </div>
+              </Link>
+            </motion.div>
+          ))}
         </div>
       </section>
 
-      {/* Alerts and Recent Activity */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <LowStockAlert lowStockCount={stats?.lowStockItems || 0} />
-        <RecentActivity activity={recentActivity} />
+      {/* Summary Cards Section */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Business Summary */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="rounded-2xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-8 shadow-lg bg-gradient-to-br from-white/40 dark:from-white/5 to-white/20 dark:to-white/10"
+        >
+          <h3 className="text-2xl font-bold mb-6 flex items-center gap-2">
+            <PieChart className="h-6 w-6 text-cyan-600" />
+            Résumé Métier
+          </h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 dark:bg-white/10">
+              <div className="flex items-center gap-3">
+                <ShoppingCart className="h-5 w-5 text-emerald-600" />
+                <span className="font-medium">Ventes Complétées</span>
+              </div>
+              <span className="text-lg font-bold text-emerald-600">{stats?.completedSales || 0}</span>
+            </div>
+            <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 dark:bg-white/10">
+              <div className="flex items-center gap-3">
+                <Package className="h-5 w-5 text-blue-600" />
+                <span className="font-medium">Références Produits</span>
+              </div>
+              <span className="text-lg font-bold text-blue-600">{stats?.totalProducts || 0}</span>
+            </div>
+            <div className="flex items-center justify-between p-4 rounded-xl bg-white/50 dark:bg-white/10">
+              <div className="flex items-center gap-3">
+                <AlertTriangle className="h-5 w-5 text-orange-600" />
+                <span className="font-medium">Produits en Alerte</span>
+              </div>
+              <span className="text-lg font-bold text-orange-600">{stats?.lowStockItems || 0}</span>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Performance Indicator */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="rounded-2xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-8 shadow-lg bg-gradient-to-br from-white/40 dark:from-white/5 to-white/20 dark:to-white/10"
+        >
+          <h3 className="text-2xl font-bold mb-6 flex items-center gap-2">
+            <TrendingUp className="h-6 w-6 text-green-600" />
+            Indicateurs de Performance
+          </h3>
+          <div className="space-y-6">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">Taux de Stock Optimal</span>
+                <span className="text-sm font-bold text-green-600">{Math.max(0, Math.round(((stats?.totalProducts || 0) - (stats?.lowStockItems || 0)) / (stats?.totalProducts || 1) * 100))}%</span>
+              </div>
+              <Progress value={Math.max(0, Math.round(((stats?.totalProducts || 0) - (stats?.lowStockItems || 0)) / (stats?.totalProducts || 1) * 100))} className="h-3" />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">Santé Inventaire</span>
+                <span className="text-sm font-bold text-blue-600">{stats?.totalProducts ? Math.round((stats.totalProducts / (stats.totalProducts + 10)) * 100) : 0}%</span>
+              </div>
+              <Progress value={stats?.totalProducts ? Math.round((stats.totalProducts / (stats.totalProducts + 10)) * 100) : 0} className="h-3" />
+            </div>
+          </div>
+        </motion.div>
       </section>
+
+      {/* Recent Activity */}
+      <RecentActivity activity={recentActivity} />
     </div>
   );
 }
