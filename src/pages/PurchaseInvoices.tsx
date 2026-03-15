@@ -171,6 +171,7 @@ export default function PurchaseInvoices() {
       select_product: 'Sélectionner un produit',
       create_invoice: 'Créer la Facture',
       invoice_created: '✅ Facture créée avec succès',
+      invoice_date: '📅 Date de la Facture',
     },
     ar: {
       title: '🚚 فواتير الشراء',
@@ -243,6 +244,7 @@ export default function PurchaseInvoices() {
       select_product: 'تحديد منتج',
       create_invoice: 'إنشاء الفاتورة',
       invoice_created: '✅ تم إنشاء الفاتورة بنجاح',
+      invoice_date: '📅 تاريخ الفاتورة',
     },
   };
 
@@ -1033,47 +1035,135 @@ export default function PurchaseInvoices() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ delay: index * 0.05 }}
+                whileHover={{ y: -4 }}
               >
-                <Card className="hover:shadow-xl transition-all hover:scale-102 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                  <CardHeader className="bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-blue-900">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          <span className="text-2xl">🧾</span>
-                          {invoice.invoice_number}
+                <Card className="hover:shadow-2xl transition-all bg-gradient-to-br from-white to-slate-50 dark:from-slate-800 dark:to-slate-900 border border-slate-200 dark:border-slate-700 overflow-hidden">
+                  {/* Header with Status */}
+                  <CardHeader className="bg-gradient-to-r from-slate-50 via-blue-50 to-cyan-50 dark:from-slate-900 dark:via-blue-900 dark:to-cyan-900 border-b border-slate-200 dark:border-slate-700">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <CardTitle className="text-xl flex items-center gap-2 mb-2">
+                          <span className="text-3xl">🧾</span>
+                          <span className="font-bold text-slate-900 dark:text-white">{invoice.invoice_number}</span>
                         </CardTitle>
-                        <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 flex items-center gap-2">
+                        <p className="text-sm text-slate-600 dark:text-slate-400 flex items-center gap-2 font-medium">
                           <span>🏭</span>
                           {invoice.supplier_name}
                         </p>
                       </div>
-                      <Badge className={getStatusColor(invoice.status)}>
-                        {getStatusEmoji(invoice.status)} {getText(`filter_${invoice.status}`)}
-                      </Badge>
+                      <motion.div whileHover={{ scale: 1.1 }}>
+                        <Badge className={`${getStatusColor(invoice.status)} text-sm font-bold px-3 py-1 whitespace-nowrap`}>
+                          {getStatusEmoji(invoice.status)} {getText(`filter_${invoice.status}`)}
+                        </Badge>
+                      </motion.div>
                     </div>
                   </CardHeader>
 
-                  <CardContent className="pt-4">
-                    {/* Invoice Details */}
-                    <div className="space-y-3 mb-6 bg-slate-50 dark:bg-slate-700/30 p-4 rounded-lg">
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-600 dark:text-slate-400 flex items-center gap-2">
-                          <span>📅</span> {getText('date')}
-                        </span>
-                        <span className="font-semibold text-slate-800 dark:text-slate-200">{formatDate(invoice.invoice_date)}</span>
+                  <CardContent className="pt-5 space-y-4">
+                    {/* Invoice Header Info */}
+                    <div className="grid grid-cols-3 gap-3 pb-4 border-b border-slate-200 dark:border-slate-700">
+                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                        <p className="text-2xl mb-1">📅</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('date')}</p>
+                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{formatDate(invoice.invoice_date)}</p>
+                      </motion.div>
+                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                        <p className="text-2xl mb-1">📅</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('due_date')}</p>
+                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{formatDate(invoice.due_date)}</p>
+                      </motion.div>
+                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
+                        <p className="text-2xl mb-1">💳</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('payment_method')}</p>
+                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{invoice.payment_method || 'N/A'}</p>
+                      </motion.div>
+                    </div>
+
+                    {/* Products Section */}
+                    {invoice.items && invoice.items.length > 0 && (
+                      <div className="space-y-3">
+                        <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <span>📦</span> {getText('items')} ({invoice.items.length})
+                        </h3>
+                        <div className="space-y-2">
+                          {invoice.items.map((item, idx) => (
+                            <motion.div
+                              key={item.id}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: idx * 0.05 }}
+                              className="p-3 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-800 rounded-lg border border-slate-200 dark:border-slate-600 hover:shadow-md transition-shadow"
+                            >
+                              <div className="flex justify-between items-start mb-2">
+                                <div>
+                                  <p className="font-semibold text-slate-900 dark:text-white">{item.product_name}</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400">📊 {item.quantity} × {currency(item.unit_price)}</p>
+                                </div>
+                                <span className="font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-2 py-1 rounded text-sm">
+                                  {currency(item.total_price)}
+                                </span>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="border-t border-slate-200 dark:border-slate-600 pt-3 flex justify-between items-center">
-                        <span className="text-slate-600 dark:text-slate-400 font-semibold flex items-center gap-2">
+                    )}
+
+                    {/* Cost Summary Section */}
+                    <div className="bg-gradient-to-br from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-lg border border-slate-300 dark:border-slate-600 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                          <span>📋</span> {getText('subtotal')}
+                        </span>
+                        <span className="font-semibold text-slate-900 dark:text-white">{currency(invoice.subtotal)}</span>
+                      </div>
+                      {invoice.tax_amount > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                            <span>🏛️</span> {getText('tax')}
+                          </span>
+                          <span className="font-semibold text-amber-600 dark:text-amber-400">{currency(invoice.tax_amount)}</span>
+                        </div>
+                      )}
+                      {invoice.discount_amount > 0 && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                            <span>🎁</span> {getText('discount')}
+                          </span>
+                          <span className="font-semibold text-green-600 dark:text-green-400">-{currency(invoice.discount_amount)}</span>
+                        </div>
+                      )}
+                      <div className="border-t border-slate-300 dark:border-slate-600 pt-2 flex justify-between items-center">
+                        <span className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                           <span>💰</span> {getText('total')}
                         </span>
-                        <span className="font-bold text-xl bg-gradient-to-r from-blue-600 to-blue-500 bg-clip-text text-transparent dark:from-blue-400 dark:to-blue-300">
+                        <span className="font-bold text-lg bg-gradient-to-r from-green-600 to-emerald-600 dark:from-green-500 dark:to-emerald-500 bg-clip-text text-transparent">
                           {currency(invoice.total_amount)}
                         </span>
                       </div>
                     </div>
 
+                    {/* Payment Status */}
+                    <div className="bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 p-4 rounded-lg border border-cyan-200 dark:border-cyan-800 space-y-2">
+                      <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3">
+                        <span>💳</span> {getText('payment_summary')}
+                      </h4>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                          <span>✅</span> {getText('amount_paid')}
+                        </span>
+                        <span className="font-bold text-green-600 dark:text-green-400">{currency(0)}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                          <span>🔄</span> {getText('remaining')}
+                        </span>
+                        <span className="font-bold text-orange-600 dark:text-orange-400">{currency(invoice.total_amount)}</span>
+                      </div>
+                    </div>
+
                     {/* Action Buttons */}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 pt-2">
                       <Dialog>
                         <DialogTrigger asChild>
                           <Button
@@ -1084,67 +1174,167 @@ export default function PurchaseInvoices() {
                             👁️ {getText('view')}
                           </Button>
                         </DialogTrigger>
-                        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                          <DialogHeader>
-                            <DialogTitle>{getText('details')}</DialogTitle>
-                            <DialogDescription>
+                        <DialogContent className="max-w-3xl max-h-[95vh] overflow-y-auto bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-800">
+                          <DialogHeader className="bg-gradient-to-r from-blue-600 to-cyan-600 dark:from-blue-500 dark:to-cyan-500 -m-6 mb-6 p-6 rounded-t-lg">
+                            <DialogTitle className="text-2xl text-white flex items-center gap-2">
+                              <span>📋</span> {getText('details')}
+                            </DialogTitle>
+                            <DialogDescription className="text-blue-100">
                               {language === 'ar'
-                                ? 'عرض تفاصيل فاتورة الشراء'
-                                : 'Afficher les détails de la facture d\'achat'}
+                                ? 'عرض تفاصيل شاملة لفاتورة الشراء'
+                                : 'Afficher les détails complets de la facture d\'achat'}
                             </DialogDescription>
                           </DialogHeader>
 
                           {selectedInvoice && (
-                            <div className={`space-y-4 ${isRTL ? 'text-right' : ''}`}>
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <p className="text-sm text-slate-600 dark:text-slate-400">{getText('invoice_number')}</p>
-                                  <p className="font-bold">{selectedInvoice.invoice_number}</p>
-                                </div>
-                                <div>
-                                  <p className="text-sm text-slate-600 dark:text-slate-400">{getText('supplier')}</p>
-                                  <p className="font-bold">{selectedInvoice.supplier_name}</p>
-                                </div>
+                            <motion.div className={`space-y-5 ${isRTL ? 'text-right' : ''}`}
+                              initial={{ opacity: 0, y: 20 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.3 }}
+                            >
+                              {/* Invoice Header Info */}
+                              <div className="grid grid-cols-3 gap-4">
+                                <motion.div whileHover={{ scale: 1.05 }} className="p-4 bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 rounded-lg border border-blue-200 dark:border-blue-700">
+                                  <p className="text-3xl mb-2">🧾</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('invoice_number')}</p>
+                                  <p className="font-bold text-slate-900 dark:text-white text-lg">{selectedInvoice.invoice_number}</p>
+                                </motion.div>
+                                <motion.div whileHover={{ scale: 1.05 }} className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 rounded-lg border border-purple-200 dark:border-purple-700">
+                                  <p className="text-3xl mb-2">🏭</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('supplier')}</p>
+                                  <p className="font-bold text-slate-900 dark:text-white text-lg">{selectedInvoice.supplier_name}</p>
+                                </motion.div>
+                                <motion.div whileHover={{ scale: 1.05 }} className={`p-4 bg-gradient-to-br ${
+                                  selectedInvoice.status === 'paid' ? 'from-green-50 to-green-100 dark:from-green-900/30 dark:to-green-800/30 border-green-200 dark:border-green-700' :
+                                  selectedInvoice.status === 'pending' ? 'from-yellow-50 to-yellow-100 dark:from-yellow-900/30 dark:to-yellow-800/30 border-yellow-200 dark:border-yellow-700' :
+                                  'from-red-50 to-red-100 dark:from-red-900/30 dark:to-red-800/30 border-red-200 dark:border-red-700'
+                                } rounded-lg border`}>
+                                  <p className="text-3xl mb-2">{getStatusEmoji(selectedInvoice.status)}</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('status')}</p>
+                                  <p className="font-bold text-slate-900 dark:text-white text-lg capitalize">{getText(`filter_${selectedInvoice.status}`)}</p>
+                                </motion.div>
                               </div>
 
+                              {/* Dates and Payment Info */}
+                              <div className="grid grid-cols-2 gap-4">
+                                <motion.div whileHover={{ scale: 1.02 }} className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-700">
+                                  <p className="text-2xl mb-2">📅</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('invoice_date')}</p>
+                                  <p className="font-bold text-slate-900 dark:text-white">{formatDate(selectedInvoice.invoice_date)}</p>
+                                </motion.div>
+                                <motion.div whileHover={{ scale: 1.02 }} className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-700">
+                                  <p className="text-2xl mb-2">📅</p>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('due_date')}</p>
+                                  <p className="font-bold text-slate-900 dark:text-white">{formatDate(selectedInvoice.due_date)}</p>
+                                </motion.div>
+                              </div>
+
+                              {/* Products Section */}
                               {selectedInvoice.items && selectedInvoice.items.length > 0 && (
-                                <div>
-                                  <h3 className="font-semibold mb-3">{getText('items')}</h3>
-                                  <div className="space-y-2">
-                                    {selectedInvoice.items.map((item) => (
-                                      <div key={item.id} className="flex justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded">
-                                        <span>{item.product_name}</span>
-                                        <span className="text-sm">
-                                          {item.quantity} × {currency(item.unit_price)}
-                                        </span>
-                                      </div>
+                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="border-2 border-slate-300 dark:border-slate-700 rounded-lg p-4">
+                                  <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-white flex items-center gap-2">
+                                    <span className="text-2xl">📦</span> {getText('items')} ({selectedInvoice.items.length})
+                                  </h3>
+                                  <div className="space-y-3">
+                                    {selectedInvoice.items.map((item, idx) => (
+                                      <motion.div
+                                        key={item.id}
+                                        initial={{ opacity: 0, x: -20 }}
+                                        animate={{ opacity: 1, x: 0 }}
+                                        transition={{ delay: idx * 0.1 }}
+                                        whileHover={{ x: 4 }}
+                                        className="p-4 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-700 rounded-lg border border-slate-300 dark:border-slate-600 shadow-sm hover:shadow-md transition-shadow"
+                                      >
+                                        <div className="flex justify-between items-start mb-2">
+                                          <div className="flex-1">
+                                            <p className="font-bold text-slate-900 dark:text-white text-base">{item.product_name}</p>
+                                            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                                              <span className="inline-block mr-4">📊 {item.quantity} {language === 'ar' ? 'وحدة' : 'unité(s)'}</span>
+                                              <span className="inline-block">💲 {currency(item.unit_price)}/{language === 'ar' ? 'وحدة' : 'unité'}</span>
+                                            </p>
+                                          </div>
+                                          <motion.div whileHover={{ scale: 1.1 }} className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-3 py-2 rounded-lg font-bold">
+                                            {currency(item.total_price)}
+                                          </motion.div>
+                                        </div>
+                                      </motion.div>
                                     ))}
                                   </div>
-                                </div>
+                                </motion.div>
                               )}
 
-                              <div className="border-t pt-4 space-y-2">
-                                <div className="flex justify-between">
-                                  <span>{getText('subtotal')}</span>
-                                  <span>{currency(selectedInvoice.subtotal)}</span>
+                              {/* Cost Summary Section */}
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-gradient-to-br from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-700 p-5 rounded-lg border-2 border-slate-300 dark:border-slate-600 space-y-3">
+                                <h3 className="font-bold text-lg text-slate-900 dark:text-white flex items-center gap-2 mb-4">
+                                  <span className="text-2xl">💰</span> {getText('payment_summary')}
+                                </h3>
+                                
+                                <div className="space-y-2">
+                                  <div className="flex justify-between items-center p-2 bg-white dark:bg-slate-900/30 rounded">
+                                    <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
+                                      <span>📋</span> {getText('subtotal')}
+                                    </span>
+                                    <span className="font-bold text-slate-900 dark:text-white">{currency(selectedInvoice.subtotal)}</span>
+                                  </div>
+                                  
+                                  {selectedInvoice.tax_amount > 0 && (
+                                    <div className="flex justify-between items-center p-2 bg-white dark:bg-slate-900/30 rounded">
+                                      <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
+                                        <span>🏛️</span> {getText('tax')}
+                                      </span>
+                                      <span className="font-bold text-amber-600 dark:text-amber-400">{currency(selectedInvoice.tax_amount)}</span>
+                                    </div>
+                                  )}
+                                  
+                                  {selectedInvoice.discount_amount > 0 && (
+                                    <div className="flex justify-between items-center p-2 bg-white dark:bg-slate-900/30 rounded">
+                                      <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
+                                        <span>🎁</span> {getText('discount')}
+                                      </span>
+                                      <span className="font-bold text-green-600 dark:text-green-400">-{currency(selectedInvoice.discount_amount)}</span>
+                                    </div>
+                                  )}
+                                  
+                                  <div className="border-t-2 border-slate-400 dark:border-slate-500 pt-3 flex justify-between items-center p-2 bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-500 dark:to-blue-400 rounded-lg text-white">
+                                    <span className="font-bold text-base flex items-center gap-2">
+                                      <span>💵</span> {getText('total')}
+                                    </span>
+                                    <span className="font-bold text-xl">{currency(selectedInvoice.total_amount)}</span>
+                                  </div>
                                 </div>
-                                <div className="border-t pt-2 flex justify-between font-bold text-lg">
-                                  <span>{getText('total')}</span>
-                                  <span className="text-blue-600 dark:text-blue-400">
-                                    {currency(selectedInvoice.total_amount)}
-                                  </span>
-                                </div>
+                              </motion.div>
+
+                              {/* Additional Info */}
+                              {selectedInvoice.notes && (
+                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }} className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-700">
+                                  <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-2">
+                                    <span>📝</span> {getText('notes')}
+                                  </p>
+                                  <p className="text-slate-700 dark:text-slate-300 text-sm">{selectedInvoice.notes}</p>
+                                </motion.div>
+                              )}
+
+                              {/* Action Buttons */}
+                              <div className="flex gap-3 pt-4 border-t border-slate-300 dark:border-slate-700">
+                                {selectedInvoice.status !== 'paid' && (
+                                  <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex-1">
+                                    <Button
+                                      onClick={() => markAsPaid(selectedInvoice.id)}
+                                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold shadow-lg hover:shadow-xl transition-all"
+                                    >
+                                      ✅ {getText('mark_as_paid')}
+                                    </Button>
+                                  </motion.div>
+                                )}
+                                {selectedInvoice.status === 'paid' && (
+                                  <motion.div whileHover={{ scale: 1.05 }} className="flex-1">
+                                    <div className="w-full p-3 bg-green-100 dark:bg-green-900/30 rounded-lg border-2 border-green-500 text-center font-bold text-green-700 dark:text-green-400">
+                                      ✅ {language === 'ar' ? 'تم الدفع' : 'Payée'}
+                                    </div>
+                                  </motion.div>
+                                )}
                               </div>
-
-                              {selectedInvoice.status !== 'paid' && (
-                                <Button
-                                  onClick={() => markAsPaid(selectedInvoice.id)}
-                                  className="w-full bg-green-600 hover:bg-green-700"
-                                >
-                                  💳 {getText('mark_as_paid')}
-                                </Button>
-                              )}
-                            </div>
+                            </motion.div>
                           )}
                         </DialogContent>
                       </Dialog>
