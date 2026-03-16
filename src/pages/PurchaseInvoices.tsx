@@ -43,6 +43,7 @@ interface Product {
   buying_price: number;
   margin_percent: number;
   selling_price: number;
+  last_selling_price?: number;
   initial_quantity: number;
   current_quantity: number;
   min_quantity: number;
@@ -143,31 +144,32 @@ export default function PurchaseInvoices() {
       filter_paid: 'Payé',
       filter_cancelled: 'Annulé',
       filter_overdue: 'En Retard',
-      product_info: '📦 Informations Produit',
+      product_info: 'Informations Produit',
       product_name: '📛 Nom du Produit',
       barcode: '🔲 Code Barre',
       generate_barcode: 'Générer',
       brand: '🏷️ Marque',
       description: '📝 Description',
-      pricing: '💵 Tarification',
+      pricing: 'Tarification',
       buying_price: '💵 Prix Achat',
       margin_percent: '📈 Marge %',
       selling_price: '💰 Prix Vente',
-      quantities: '📊 Quantités',
+      last_selling_price: '⏱️ Dernier Prix Vente',
+      quantities: 'Quantités',
       initial_qty: '📦 Qté Initiale',
       current_qty: '📊 Qté Actuelle',
       min_qty: '⚠️ Qté Min',
-      category_section: '🏷️ Catégorie et Fournisseur',
+      category_section: 'Catégorie et Fournisseur',
       category: '🏷️ Catégorie',
       supplier_section: '🚚 Fournisseur',
-      store_section: '🏪 Magasin et Étagers',
+      store_section: 'Magasin et Étagers',
       store: '🏪 Magasin',
       shelving: '📚 Étager',
       line: '📍 Ligne',
-      payment_summary: '💸 Résumé du Paiement',
+      payment_summary: 'Résumé du Paiement',
       total_price: '💵 Prix Total Calculé',
       amount_paid: '💳 Montant Payé',
-      remaining: '🔄 Reste à Payer',
+      remaining: 'Reste à Payer',
       save: '💾 Enregistrer',
       cancel: 'Annuler',
       search_product: 'Rechercher un produit...',
@@ -216,31 +218,32 @@ export default function PurchaseInvoices() {
       filter_paid: 'مدفوع',
       filter_cancelled: 'ملغاة',
       filter_overdue: 'متأخرة',
-      product_info: '📦 معلومات المنتج',
+      product_info: 'معلومات المنتج',
       product_name: '📛 اسم المنتج',
       barcode: '🔲 رمز المنتج',
       generate_barcode: 'إنشاء',
       brand: '🏷️ العلامة التجارية',
       description: '📝 الوصف',
-      pricing: '💵 التسعير',
+      pricing: 'التسعير',
       buying_price: '💵 سعر الشراء',
       margin_percent: '📈 نسبة الهامش',
       selling_price: '💰 سعر البيع',
-      quantities: '📊 الكميات',
+      last_selling_price: '⏱️ آخر سعر بيع',
+      quantities: 'الكميات',
       initial_qty: '📦 الكمية الأولية',
       current_qty: '📊 الكمية الحالية',
       min_qty: '⚠️ الحد الأدنى',
-      category_section: '🏷️ الفئة والمورد',
+      category_section: 'الفئة والمورد',
       category: '🏷️ الفئة',
       supplier_section: '🚚 المورد',
-      store_section: '🏪 المتجر والرفوف',
+      store_section: 'المتجر والرفوف',
       store: '🏪 المتجر',
       shelving: '📚 الرفوف',
       line: '📍 السطر',
-      payment_summary: '💸 ملخص الدفع',
+      payment_summary: 'ملخص الدفع',
       total_price: '💵 السعر الإجمالي المحسوب',
       amount_paid: '💳 المبلغ المدفوع',
-      remaining: '🔄 الباقي المستحق',
+      remaining: 'الباقي المستحق',
       save: '💾 حفظ',
       cancel: 'إلغاء',
       search_product: 'البحث عن منتج...',
@@ -351,6 +354,7 @@ export default function PurchaseInvoices() {
         .from('invoice_items')
         .select(`
           id,
+          invoice_id,
           product_id,
           product_name,
           quantity,
@@ -442,6 +446,50 @@ export default function PurchaseInvoices() {
       });
 
       if (itemError) throw itemError;
+
+      // Update product with edited information and add purchased quantity to stock
+      const currentInitial = parseInt(formData.initial_quantity?.toString() || '0') || 0;
+      const currentCurrent = parseInt(formData.current_quantity?.toString() || '0') || 0;
+      const purchaseQty = parseInt(quantity?.toString() || '0') || 0;
+      
+      const newInitialQuantity = currentInitial + purchaseQty;
+      const newCurrentQuantity = currentCurrent + purchaseQty;
+      
+      console.log('Purchase Invoice Update:', {
+        productId: formData.id,
+        currentInitial,
+        currentCurrent,
+        purchaseQty,
+        newInitialQuantity,
+        newCurrentQuantity,
+      });
+      
+      // Prepare update data with all tarification and product information
+      const updateData = {
+        // Tarification (Pricing Information)
+        buying_price: parseFloat(formData.buying_price?.toString() || '0') || 0,
+        margin_percent: parseFloat(formData.margin_percent?.toString() || '0') || 0,
+        selling_price: parseFloat(formData.selling_price?.toString() || '0') || 0,
+        // Location Information
+        shelving_location: formData.shelving_location || '',
+        shelving_line: formData.shelving_line || 0,
+        // Quantity Information (add purchased quantity to existing stock)
+        initial_quantity: newInitialQuantity,
+        current_quantity: newCurrentQuantity,
+        min_quantity: parseFloat(formData.min_quantity?.toString() || '0') || 0,
+      };
+      
+      console.log('Update data being sent:', updateData);
+      
+      const { error: updateError } = await supabase
+        .from('products')
+        .update(updateData)
+        .eq('id', formData.id);
+
+      if (updateError) {
+        console.error('Update error:', updateError);
+        throw updateError;
+      }
 
       toast({
         title: getText('invoice_created'),
@@ -764,7 +812,7 @@ export default function PurchaseInvoices() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-4 gap-4">
                       <div>
                         <Label>{getText('buying_price')}</Label>
                         <Input
@@ -788,16 +836,17 @@ export default function PurchaseInvoices() {
                         <Input
                           type="number"
                           value={formData?.margin_percent || 0}
-                          onChange={(e) =>
-                            setFormData(
-                              formData
-                                ? {
-                                    ...formData,
-                                    margin_percent: parseFloat(e.target.value),
-                                  }
-                                : null
-                            )
-                          }
+                          onChange={(e) => {
+                            const margin = parseFloat(e.target.value) || 0;
+                            if (formData) {
+                              const newSellingPrice = formData.buying_price * (1 + margin / 100);
+                              setFormData({
+                                ...formData,
+                                margin_percent: margin,
+                                selling_price: Math.round(newSellingPrice * 100) / 100,
+                              });
+                            }
+                          }}
                           className="mt-2"
                         />
                       </div>
@@ -806,8 +855,30 @@ export default function PurchaseInvoices() {
                         <Input
                           type="number"
                           value={formData?.selling_price || 0}
-                          disabled
-                          className="mt-2 bg-slate-100 dark:bg-slate-800"
+                          onChange={(e) => {
+                            const sellingPrice = parseFloat(e.target.value) || 0;
+                            if (formData) {
+                              const newMargin = formData.buying_price > 0 
+                                ? ((sellingPrice - formData.buying_price) / formData.buying_price) * 100
+                                : 0;
+                              setFormData({
+                                ...formData,
+                                selling_price: sellingPrice,
+                                margin_percent: Math.round(newMargin * 100) / 100,
+                              });
+                            }
+                          }}
+                          className="mt-2"
+                        />
+                      </div>
+                      <div>
+                        <Label>{getText('last_selling_price')}</Label>
+                        <Input
+                          type="number"
+                          value={formData?.last_selling_price || ''}
+                          onChange={(e) => setFormData(formData ? { ...formData, last_selling_price: parseFloat(e.target.value) || 0 } : null)}
+                          placeholder="Dernier prix..."
+                          className="mt-2"
                         />
                       </div>
                     </div>
@@ -822,23 +893,15 @@ export default function PurchaseInvoices() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <Label>{getText('initial_qty')}</Label>
+                        <Label>🛒 {language === 'ar' ? 'كمية الشراء' : 'Qté à Acheter'}</Label>
                         <Input 
                           type="number"
-                          value={formData?.initial_quantity || 0}
-                          onChange={(e) => setFormData(formData ? { ...formData, initial_quantity: parseInt(e.target.value) || 0 } : null)}
+                          value={quantity}
+                          onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
                           className="mt-2"
-                        />
-                      </div>
-                      <div>
-                        <Label>{getText('current_qty')}</Label>
-                        <Input 
-                          type="number"
-                          value={formData?.current_quantity || 0}
-                          onChange={(e) => setFormData(formData ? { ...formData, current_quantity: parseInt(e.target.value) || 0 } : null)}
-                          className="mt-2"
+                          min="1"
                         />
                       </div>
                       <div>
@@ -897,15 +960,15 @@ export default function PurchaseInvoices() {
                     <div className="grid grid-cols-3 gap-4">
                       <div>
                         <Label>{getText('store')}</Label>
-                        <Input value={formData?.store_name || ''} disabled className="mt-2 bg-slate-100 dark:bg-slate-800" />
+                        <Input value={formData?.store_name || ''} onChange={(e) => setFormData(formData ? { ...formData, store_name: e.target.value } : null)} className="mt-2" />
                       </div>
                       <div>
                         <Label>{getText('shelving')}</Label>
-                        <Input value={formData?.shelving_location || ''} disabled className="mt-2 bg-slate-100 dark:bg-slate-800" />
+                        <Input value={formData?.shelving_location || ''} onChange={(e) => setFormData(formData ? { ...formData, shelving_location: e.target.value } : null)} className="mt-2" />
                       </div>
                       <div>
                         <Label>{getText('line')}</Label>
-                        <Input value={formData?.shelving_line || 0} disabled className="mt-2 bg-slate-100 dark:bg-slate-800" />
+                        <Input type="number" value={formData?.shelving_line || 0} onChange={(e) => setFormData(formData ? { ...formData, shelving_line: parseInt(e.target.value) || 0 } : null)} className="mt-2" />
                       </div>
                     </div>
                   </CardContent>
@@ -922,31 +985,13 @@ export default function PurchaseInvoices() {
                     <div className="grid grid-cols-2 gap-4 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-red-200 dark:border-red-800">
                       <div>
                         <Label className="font-semibold text-lg">{getText('total_price')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.buying_price || 0}
-                          onChange={(e) => setFormData(formData ? { ...formData, buying_price: parseFloat(e.target.value) || 0 } : null)}
-                          className="mt-2 text-lg font-bold"
-                          placeholder="0"
-                        />
+                        <p className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">
+                          {currency((formData?.buying_price || 0) * quantity)}
+                        </p>
                         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                           {language === 'ar' ? 'السعر الإجمالي المحسوب = السعر × الكمية' : 'Calculé automatiquement = Prix × Quantité'}
                         </p>
                       </div>
-                      <div className="flex flex-col justify-between">
-                        <div>
-                          <Label className="text-slate-600 dark:text-slate-400">{language === 'ar' ? 'الكمية المطلوبة' : 'Quantité demandée'}</Label>
-                          <p className="mt-2 text-2xl font-bold text-purple-600 dark:text-purple-400">
-                            {quantity} {language === 'ar' ? 'وحدة' : 'unités'}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs text-slate-500 dark:text-slate-400">= {currency((formData?.buying_price || 0) * quantity)}</p>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <Label className="font-semibold flex items-center gap-2">
                           <span>💵</span> {getText('amount_paid')}
@@ -959,14 +1004,15 @@ export default function PurchaseInvoices() {
                           placeholder="0"
                         />
                       </div>
-                      <div>
-                        <Label className="font-semibold flex items-center gap-2">
-                          <span>🔄</span> {getText('remaining')}
-                        </Label>
-                        <p className="mt-2 text-lg font-bold p-2 rounded-lg bg-gradient-to-r from-orange-100 to-red-100 dark:from-orange-900/30 dark:to-red-900/30 text-orange-600 dark:text-orange-400">
-                          {currency((formData?.buying_price || 0) * quantity - amountPaid)}
-                        </p>
-                      </div>
+                    </div>
+                    
+                    <div>
+                      <Label className="font-semibold flex items-center gap-2">
+                        <span>🔄</span> {getText('remaining')}
+                      </Label>
+                      <p className="mt-2 text-lg font-bold p-2 rounded-lg bg-gradient-to-r from-orange-100 to-red-100 dark:from-orange-900/30 dark:to-red-900/30 text-orange-600 dark:text-orange-400">
+                        {currency((formData?.buying_price || 0) * quantity - amountPaid)}
+                      </p>
                     </div>
                   </CardContent>
                 </Card>

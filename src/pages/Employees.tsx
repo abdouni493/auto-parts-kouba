@@ -55,20 +55,25 @@ import {
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee } from '@/lib/supabaseClient';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth } from '@/lib/supabaseClient';
 import { useToast } from '@/hooks/use-toast';
 
 interface Employee {
-  id: number;
-  name: string;
+  id: string;
+  full_name: string;
+  email: string;
   phone: string;
-  role: 'admin' | 'employee';
+  position: 'admin' | 'worker';
   salary: number;
-  hireDate: string;
-  status: 'active' | 'inactive';
+  hire_date: string;
+  birth_date?: string;
   address: string;
-  username: string;
-  hasAccount: boolean;
+  department?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at?: string;
+  username?: string;
+  hasAccount?: boolean;
   lastPayment?: {
     amount: number;
     date: string;
@@ -99,11 +104,13 @@ export default function Employees() {
   const [error, setError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
-    name: '',
+    full_name: '',
+    email: '',
     phone: '',
-    role: 'employee' as Employee['role'],
+    position: 'worker',
     salary: 0,
     address: '',
+    birth_date: '',
     username: '',
     password: '',
     confirmPassword: ''
@@ -117,6 +124,8 @@ export default function Employees() {
 
   const [paymentHistory, setPaymentHistory] = useState<Payment[]>([]);
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false);
+  const [totalPayments, setTotalPayments] = useState(0);
+  const [paymentsThisMonth, setPaymentsThisMonth] = useState(0);
 
   const fetchEmployees = async () => {
     setIsLoading(true);
@@ -138,20 +147,36 @@ export default function Employees() {
     }
   };
 
-  const fetchPaymentHistory = async (employeeId: number) => {
-    // Payment history would be stored in a payments table in Supabase
-    // For now, we'll just show last payment from employee record
-    setPaymentHistory([]);
+  const fetchPaymentHistory = async (employeeId: string) => {
+    try {
+      const data = await getPaymentHistory(employeeId);
+      setPaymentHistory(data || []);
+    } catch (err) {
+      console.error('Failed to fetch payment history:', err);
+      setPaymentHistory([]);
+    }
+  };
+
+  const fetchPaymentStats = async () => {
+    try {
+      const total = await getTotalPayments();
+      const thisMonth = await getPaymentsThisMonth();
+      setTotalPayments(total || 0);
+      setPaymentsThisMonth(thisMonth || 0);
+    } catch (err) {
+      console.error('Failed to fetch payment stats:', err);
+    }
   };
 
   useEffect(() => {
     fetchEmployees();
+    fetchPaymentStats();
   }, []);
 
   const filteredEmployees = employees.filter(employee => {
-    const matchesSearch = employee.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          employee.phone.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRole = filterRole === 'all' || employee.role === filterRole;
+    const matchesSearch = (employee.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (employee.phone || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesRole = filterRole === 'all' || employee.position === filterRole;
     return matchesSearch && matchesRole;
   });
 
@@ -175,11 +200,13 @@ export default function Employees() {
   const handleCreateEmployee = () => {
     setDialogMode('create');
     setFormData({
-      name: '',
+      full_name: '',
+      email: '',
       phone: '',
-      role: 'employee',
+      position: 'worker',
       salary: 0,
       address: '',
+      birth_date: '',
       username: '',
       password: '',
       confirmPassword: ''
@@ -191,12 +218,14 @@ export default function Employees() {
     setSelectedEmployee(employee);
     setDialogMode('edit');
     setFormData({
-      name: employee.name,
-      phone: employee.phone,
-      role: employee.role,
-      salary: employee.salary,
-      address: employee.address,
-      username: employee.username,
+      full_name: employee.full_name || '',
+      email: employee.email || '',
+      phone: employee.phone || '',
+      position: employee.position || 'worker',
+      salary: employee.salary || 0,
+      address: employee.address || '',
+      birth_date: employee.birth_date || '',
+      username: employee.username || '',
       password: '',
       confirmPassword: ''
     });
@@ -216,7 +245,7 @@ export default function Employees() {
 
   const handleViewHistory = async (employee: Employee) => {
     setSelectedEmployee(employee);
-    await fetchPaymentHistory(employee.id);
+    await fetchPaymentHistory(String(employee.id));
     setIsHistoryDialogOpen(true);
   };
 
@@ -246,11 +275,17 @@ export default function Employees() {
   const handleSubmit = async () => {
     try {
       if (dialogMode === 'create') {
+        // Only send fields that exist in the employees table
         const newEmployeeData = {
-          ...formData,
-          created_at: new Date().toISOString(),
-          status: 'active',
-          hasAccount: formData.username && formData.password ? true : false
+          full_name: formData.full_name,
+          email: formData.email,
+          phone: formData.phone,
+          position: formData.position,
+          salary: formData.salary,
+          address: formData.address,
+          birth_date: formData.birth_date || null,
+          hire_date: new Date().toISOString().split('T')[0],
+          is_active: true
         };
         await createEmployee(newEmployeeData);
         toast({
@@ -259,9 +294,15 @@ export default function Employees() {
           variant: 'default'
         });
       } else if (dialogMode === 'edit' && selectedEmployee) {
+        // Only send fields that exist in the employees table
         const updatedEmployeeData = {
-          ...formData,
-          hasAccount: formData.username && formData.password ? true : false
+          full_name: formData.full_name,
+          email: formData.email,
+          phone: formData.phone,
+          position: formData.position,
+          salary: formData.salary,
+          address: formData.address,
+          birth_date: formData.birth_date || null
         };
         await updateEmployee(String(selectedEmployee.id), updatedEmployeeData);
         toast({
@@ -270,7 +311,17 @@ export default function Employees() {
           variant: 'default'
         });
       } else if (dialogMode === 'payment' && selectedEmployee) {
-        // Payment recording would be handled by a separate payments table
+        // Save payment to database
+        const paymentRecord = {
+          employee_id: selectedEmployee.id,
+          amount: paymentData.amount,
+          type: paymentData.type,
+          date: paymentData.date
+        };
+        await createPayment(paymentRecord);
+        // Refresh payment history and stats
+        await fetchPaymentHistory(String(selectedEmployee.id));
+        await fetchPaymentStats();
         toast({
           title: language === 'ar' ? 'تم التسجيل' : 'Recorded',
           description: language === 'ar' ? 'تم تسجيل الدفعة بنجاح' : 'Payment recorded successfully',
@@ -292,9 +343,9 @@ export default function Employees() {
   };
 
   const totalEmployees = employees.length;
-  const activeEmployees = employees.filter(emp => emp.status === 'active').length;
+  const activeEmployees = employees.filter(emp => emp.is_active === true).length;
   const totalSalaryBudget = employees.reduce((sum, emp) => sum + emp.salary, 0);
-  const employeesWithAccounts = employees.filter(emp => emp.hasAccount).length;
+  const employeesWithAccounts = employees.filter(emp => emp.hasAccount || emp.username).length;
 
   return (
     <div className={`space-y-6 animate-fade-in ${isRTL ? 'rtl' : 'ltr'}`} dir={isRTL ? 'rtl' : 'ltr'}>
@@ -375,13 +426,13 @@ export default function Employees() {
         </motion.div>
 
         <motion.div whileHover={{ y: -8 }} className="rounded-2xl overflow-hidden shadow-xl border-0">
-          <Card className="border-0 shadow-md bg-gradient-to-br from-amber-600 to-orange-600 text-white">
+          <Card className="border-0 shadow-md bg-gradient-to-br from-rose-600 to-pink-600 text-white">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">⏳ {language === 'ar' ? 'مدفوعات معلقة' : 'Paiements en Attente'}</CardTitle>
+              <CardTitle className="text-sm font-medium">💵 {language === 'ar' ? 'إجمالي المدفوعات' : 'Total Paiements'}</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-black">2</div> 
-              <p className="text-xs mt-2 opacity-90">🚀 {language === 'ar' ? 'للإنجاز' : 'À traiter'}</p>
+              <div className="text-3xl font-black">{formatCurrency(totalPayments).split('.')[0]}</div>
+              <p className="text-xs mt-2 opacity-90">📊 {language === 'ar' ? 'هذا الشهر: ' : 'Ce mois: '}{formatCurrency(paymentsThisMonth).split('.')[0]}</p>
             </CardContent>
           </Card>
         </motion.div>
@@ -415,114 +466,202 @@ export default function Employees() {
         </CardContent>
       </Card>
 
-      {/* Employees Table */}
-      <Card className="card-elevated">
-        <CardHeader>
-          <CardTitle>{language === 'ar' ? 'قائمة الموظفين' : 'Liste des Employés'}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="text-center py-8">{language === 'ar' ? 'جارٍ التحميل...' : 'Chargement...'}</div>
-          ) : error ? (
-            <div className="text-center py-8 text-destructive">{error}</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{language === 'ar' ? 'الموظف' : 'Employé'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'الدور' : 'Rôle'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'الراتب' : 'Salaire'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'تاريخ التوظيف' : 'Date d\'embauche'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'آخر دفعة' : 'Dernier Paiement'}</TableHead>
-                  <TableHead className="text-right">{language === 'ar' ? 'الإجراءات' : 'Actions'}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredEmployees.map((employee) => (
-                  <TableRow key={employee.id} className="hover:bg-muted/50">
-                    <TableCell>
-                      <div>
-                        <div className="font-medium">{employee.name}</div>
-                        <div className="text-sm text-muted-foreground flex items-center gap-4">
-                          <span className="flex items-center gap-1">
-                            <Phone className="h-3 w-3" />
-                            {employee.phone}
-                          </span>
-                        </div>
+      {/* Employees Card Grid */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-600 to-indigo-600">
+            👨‍💼 {language === 'ar' ? 'فريق العمل' : 'Équipe de Travail'} ({filteredEmployees.length})
+          </h2>
+        </div>
+
+        {isLoading ? (
+          <div className="text-center py-12">
+            <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity }} className="inline-block">
+              <div className="h-12 w-12 border-4 border-purple-200 border-t-purple-600 rounded-full"></div>
+            </motion.div>
+            <p className="mt-4 text-muted-foreground">{language === 'ar' ? '⏳ جارٍ تحميل البيانات...' : '⏳ Chargement des données...'}</p>
+          </div>
+        ) : error ? (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center py-12 px-6 rounded-2xl bg-red-100 dark:bg-red-900/30 border-2 border-red-300 dark:border-red-700"
+          >
+            <p className="text-lg font-bold text-red-700 dark:text-red-400">⚠️ {error}</p>
+          </motion.div>
+        ) : filteredEmployees.length === 0 ? (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center py-12 px-6 rounded-2xl bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border-2 border-dashed border-purple-300 dark:border-purple-700"
+          >
+            <p className="text-lg text-muted-foreground">
+              {language === 'ar' ? '👥 لا توجد موظفين يطابقون معايير البحث' : '👥 Aucun employé ne correspond à votre recherche'}
+            </p>
+          </motion.div>
+        ) : (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ staggerChildren: 0.1 }}
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+          >
+            {filteredEmployees.map((employee, idx) => (
+              <motion.div
+                key={employee.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.1 }}
+                whileHover={{ y: -12, boxShadow: "0 20px 40px rgba(0,0,0,0.15)" }}
+                className="group relative h-full"
+              >
+                {/* Card Background Gradient */}
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-2xl opacity-0 group-hover:opacity-5 transition-opacity"></div>
+
+                <Card className="h-full border-2 border-purple-200 dark:border-purple-800 bg-gradient-to-br from-white/95 to-purple-50/95 dark:from-gray-900/95 dark:to-purple-900/30 backdrop-blur-sm shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden">
+                  {/* Card Header with Role Badge */}
+                  <div className="relative p-6 pb-4 border-b-2 border-purple-100 dark:border-purple-800">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <motion.h3 
+                          className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-purple-600 to-indigo-600 mb-1"
+                        >
+                          {employee.position === 'admin' ? '👨‍💼 ' : '👤 '}{employee.full_name}
+                        </motion.h3>
+                        <p className="text-sm text-muted-foreground flex items-center gap-1">
+                          <span>{employee.position === 'admin' ? '🔑' : '💼'}</span>
+                          {employee.position === 'admin' ? (language === 'ar' ? 'مسؤول النظام' : 'Administrateur') : (language === 'ar' ? 'موظف' : 'Travailleur')}
+                        </p>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getRoleBadgeColor(employee.role)}>
-                        {employee.role === 'admin' ? (language === 'ar' ? 'مسؤول' : 'Administrateur') : (language === 'ar' ? 'موظف' : 'Employé')}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-bold text-success">
-                      {formatCurrency(employee.salary)}
-                    </TableCell>
-                    <TableCell>{formatDate(employee.hireDate)}</TableCell>
-                    <TableCell>
-                      {employee.lastPayment && employee.lastPayment.amount > 0 ? (
-                        <div className="text-sm">
-                          <div className="font-medium text-success">
-                            {formatCurrency(employee.lastPayment.amount)}
+                      <motion.div
+                        whileHover={{ scale: 1.1, rotate: 5 }}
+                        className={`px-4 py-2 rounded-xl font-bold text-white text-sm shadow-md ${
+                          employee.position === 'admin' 
+                            ? 'bg-gradient-to-r from-red-500 to-pink-500' 
+                            : 'bg-gradient-to-r from-blue-500 to-cyan-500'
+                        }`}
+                      >
+                        {employee.position === 'admin' ? '👑 Admin' : '⭐ Staff'}
+                      </motion.div>
+                    </div>
+                  </div>
+
+                  {/* Card Content */}
+                  <CardContent className="p-6 space-y-4">
+                    {/* Contact Info */}
+                    <motion.div 
+                      whileHover={{ x: 5 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 border border-blue-200 dark:border-blue-800"
+                    >
+                      <Phone className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-muted-foreground">{language === 'ar' ? 'الهاتف' : 'Téléphone'}</p>
+                        <p className="font-semibold text-blue-700 dark:text-blue-400 truncate">{employee.phone}</p>
+                      </div>
+                    </motion.div>
+
+                    {/* Salary Info */}
+                    <motion.div 
+                      whileHover={{ x: 5 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border border-green-200 dark:border-green-800"
+                    >
+                      <DollarSign className="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-xs text-muted-foreground">{language === 'ar' ? 'الراتب الشهري' : 'Salaire Mensuel'}</p>
+                        <p className="font-bold text-green-700 dark:text-green-400 text-lg">{formatCurrency(employee.salary)}</p>
+                      </div>
+                    </motion.div>
+
+                    {/* Hire Date */}
+                    <motion.div 
+                      whileHover={{ x: 5 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-orange-50 to-yellow-50 dark:from-orange-900/20 dark:to-yellow-900/20 border border-orange-200 dark:border-orange-800"
+                    >
+                      <Calendar className="h-5 w-5 text-orange-600 dark:text-orange-400 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-xs text-muted-foreground">{language === 'ar' ? 'تاريخ التوظيف' : 'Date d\'embauche'}</p>
+                        <p className="font-semibold text-orange-700 dark:text-orange-400">{formatDate(employee.hire_date)}</p>
+                      </div>
+                    </motion.div>
+
+                    {/* Last Payment Status */}
+                    <motion.div 
+                      whileHover={{ x: 5 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border border-indigo-200 dark:border-indigo-800"
+                    >
+                      <CreditCard className="h-5 w-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-muted-foreground">{language === 'ar' ? 'آخر دفعة' : 'Dernier paiement'}</p>
+                        {employee.lastPayment && employee.lastPayment.amount > 0 ? (
+                          <div>
+                            <p className="font-bold text-indigo-700 dark:text-indigo-400">{formatCurrency(employee.lastPayment.amount)}</p>
+                            <p className="text-xs text-muted-foreground">{formatDate(employee.lastPayment.date)}</p>
                           </div>
-                          <div className="text-muted-foreground">
-                            {formatDate(employee.lastPayment.date)}
-                          </div>
-                        </div>
-                      ) : (
-                        <Badge variant="outline" className="text-warning">
-                          {language === 'ar' ? 'لا توجد مدفوعات' : 'Aucun paiement'}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
+                        ) : (
+                          <p className="font-semibold text-amber-600 dark:text-amber-400">⏳ {language === 'ar' ? 'قيد الانتظار' : 'En attente'}</p>
+                        )}
+                      </div>
+                    </motion.div>
+                  </CardContent>
+
+                  {/* Card Actions Footer */}
+                  <div className="px-6 py-4 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 border-t-2 border-purple-100 dark:border-purple-800">
+                    <div className="grid grid-cols-4 gap-2">
+                      {/* View History Button */}
+                      <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
                         <Button
-                          variant="ghost"
-                          size="icon"
                           onClick={() => handleViewHistory(employee)}
-                          className="h-8 w-8 text-primary hover:text-primary"
-                          title={language === 'ar' ? 'سجل الدفع' : 'Historique de paiements'}
+                          className="w-full h-12 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-bold shadow-lg flex flex-col items-center justify-center gap-0.5 transition-all"
+                          title={language === 'ar' ? 'سجل الدفع' : 'Historique'}
                         >
-                          <Calendar className="h-4 w-4" />
+                          <span className="text-lg">📅</span>
+                          <span className="text-xs font-bold">{language === 'ar' ? 'السجل' : 'Histo.'}</span>
                         </Button>
+                      </motion.div>
+
+                      {/* Payment Button */}
+                      <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
                         <Button
-                          variant="ghost"
-                          size="icon"
                           onClick={() => handlePayment(employee)}
-                          className="h-8 w-8 text-success hover:text-success"
-                          title={language === 'ar' ? 'تسجيل دفعة' : 'Enregistrer un paiement'}
+                          className="w-full h-12 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-bold shadow-lg flex flex-col items-center justify-center gap-0.5 transition-all"
+                          title={language === 'ar' ? 'دفع' : 'Paiement'}
                         >
-                          <CreditCard className="h-4 w-4" />
+                          <span className="text-lg">💳</span>
+                          <span className="text-xs font-bold">{language === 'ar' ? 'دفع' : 'Payer'}</span>
                         </Button>
+                      </motion.div>
+
+                      {/* Edit Button */}
+                      <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
                         <Button
-                          variant="ghost"
-                          size="icon"
                           onClick={() => handleEditEmployee(employee)}
-                          className="h-8 w-8"
-                          title={language === 'ar' ? 'تعديل الموظف' : 'Modifier l\'employé'}
+                          className="w-full h-12 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold shadow-lg flex flex-col items-center justify-center gap-0.5 transition-all"
+                          title={language === 'ar' ? 'تعديل' : 'Éditer'}
                         >
-                          <Edit className="h-4 w-4" />
+                          <span className="text-lg">✏️</span>
+                          <span className="text-xs font-bold">{language === 'ar' ? 'تعديل' : 'Éditer'}</span>
                         </Button>
+                      </motion.div>
+
+                      {/* Delete Button */}
+                      <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
                         <Button
-                          variant="ghost"
-                          size="icon"
                           onClick={() => handleDeleteEmployee(employee.id)}
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          title={language === 'ar' ? 'حذف الموظف' : 'Supprimer l\'employé'}
+                          className="w-full h-12 rounded-lg bg-gradient-to-r from-red-500 to-rose-500 hover:from-red-600 hover:to-rose-600 text-white font-bold shadow-lg flex flex-col items-center justify-center gap-0.5 transition-all"
+                          title={language === 'ar' ? 'حذف' : 'Supprimer'}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <span className="text-lg">🗑️</span>
+                          <span className="text-xs font-bold">{language === 'ar' ? 'حذف' : 'Suppr.'}</span>
                         </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                      </motion.div>
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
+            ))}
+          </motion.div>
+        )}
+      </div>
 
       {/* Dialog for Create/Edit/Payment */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -626,13 +765,13 @@ export default function Employees() {
                 {/* Personal Tab */}
                 <TabsContent value="personal" className="space-y-5">
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border-2 border-purple-200 dark:border-purple-800">
-                    <Label htmlFor="name" className="font-bold text-lg text-purple-700 dark:text-purple-400">
+                    <Label htmlFor="full_name" className="font-bold text-lg text-purple-700 dark:text-purple-400">
                       👤 {language === 'ar' ? 'الاسم الكامل' : 'Nom Complet'} <span className="text-red-500">*</span>
                     </Label>
                     <Input
-                      id="name"
-                      value={formData.name}
-                      onChange={(e) => setFormData({...formData, name: e.target.value})}
+                      id="full_name"
+                      value={formData.full_name}
+                      onChange={(e) => setFormData({...formData, full_name: e.target.value})}
                       placeholder={language === 'ar' ? 'مثال: محمد علامي' : 'Ex: Mohamed Alami'}
                       className="border-2 border-purple-300 dark:border-purple-700 rounded-lg font-semibold text-base"
                     />
@@ -653,33 +792,60 @@ export default function Employees() {
                     </div>
 
                     <div className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border-2 border-green-200 dark:border-green-800">
-                      <Label htmlFor="address" className="font-bold text-lg text-green-700 dark:text-green-400">
-                        📍 {language === 'ar' ? 'العنوان' : 'Adresse'}
+                      <Label htmlFor="email" className="font-bold text-lg text-green-700 dark:text-green-400">
+                        📧 {language === 'ar' ? 'البريد الإلكتروني' : 'Email'}
                       </Label>
                       <Input
-                        id="address"
-                        value={formData.address}
-                        onChange={(e) => setFormData({...formData, address: e.target.value})}
-                        placeholder={language === 'ar' ? 'حي الرياض، الرباط' : 'Hay Riad, Rabat'}
+                        id="email"
+                        type="email"
+                        value={formData.email}
+                        onChange={(e) => setFormData({...formData, email: e.target.value})}
+                        placeholder={language === 'ar' ? 'example@email.com' : 'example@email.com'}
                         className="border-2 border-green-300 dark:border-green-700 rounded-lg font-semibold"
                       />
                     </div>
+                  </motion.div>
+
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-orange-50 to-yellow-50 dark:from-orange-900/20 dark:to-yellow-900/20 border-2 border-orange-200 dark:border-orange-800">
+                    <Label htmlFor="address" className="font-bold text-lg text-orange-700 dark:text-orange-400">
+                      📍 {language === 'ar' ? 'العنوان' : 'Adresse'}
+                    </Label>
+                    <Input
+                      id="address"
+                      value={formData.address}
+                      onChange={(e) => setFormData({...formData, address: e.target.value})}
+                      placeholder={language === 'ar' ? 'حي الرياض، الرباط' : 'Hay Riad, Rabat'}
+                      className="border-2 border-orange-300 dark:border-orange-700 rounded-lg font-semibold"
+                    />
+                  </motion.div>
+
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-pink-50 to-rose-50 dark:from-pink-900/20 dark:to-rose-900/20 border-2 border-pink-200 dark:border-pink-800">
+                    <Label htmlFor="birth_date" className="font-bold text-lg text-pink-700 dark:text-pink-400">
+                      🎂 {language === 'ar' ? 'تاريخ الميلاد' : 'Date de naissance'}
+                    </Label>
+                    <Input
+                      id="birth_date"
+                      type="date"
+                      value={formData.birth_date}
+                      onChange={(e) => setFormData({...formData, birth_date: e.target.value})}
+                      className="border-2 border-pink-300 dark:border-pink-700 rounded-lg font-semibold"
+                    />
                   </motion.div>
                 </TabsContent>
 
                 {/* Job Tab */}
                 <TabsContent value="job" className="space-y-5">
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-900/20 dark:to-blue-900/20 border-2 border-indigo-200 dark:border-indigo-800">
-                    <Label htmlFor="role" className="font-bold text-lg text-indigo-700 dark:text-indigo-400">
-                      🏆 {language === 'ar' ? 'الدور الوظيفي' : 'Rôle Professionnel'} <span className="text-red-500">*</span>
+                    <Label htmlFor="position" className="font-bold text-lg text-indigo-700 dark:text-indigo-400">
+                      🏆 {language === 'ar' ? 'المنصب الوظيفي' : 'Poste Professionnel'} <span className="text-red-500">*</span>
                     </Label>
-                    <Select value={formData.role} onValueChange={(value: any) => setFormData({...formData, role: value})}>
+                    <Select value={formData.position} onValueChange={(value: any) => setFormData({...formData, position: value})}>
                       <SelectTrigger className="border-2 border-indigo-300 dark:border-indigo-700 rounded-lg font-bold text-base">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="admin">🔑 {language === 'ar' ? 'مسؤول النظام' : 'Administrateur'}</SelectItem>
-                        <SelectItem value="employee">💼 {language === 'ar' ? 'موظف عادي' : 'Employé'}</SelectItem>
+                        <SelectItem value="worker">💼 {language === 'ar' ? 'عامل' : 'Travailleur'}</SelectItem>
                       </SelectContent>
                     </Select>
                   </motion.div>
@@ -705,7 +871,25 @@ export default function Employees() {
 
                 {/* Account Tab */}
                 <TabsContent value="account" className="space-y-5">
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-800">
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="p-6 rounded-xl bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 border-2 border-blue-300 dark:border-blue-700"
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <span className="text-3xl">🔐</span>
+                      <h3 className="text-lg font-bold text-blue-700 dark:text-blue-400">
+                        {language === 'ar' ? 'بيانات الحساب' : 'Données du Compte'}
+                      </h3>
+                    </div>
+                    <p className="text-blue-600 dark:text-blue-300 text-sm">
+                      {language === 'ar' 
+                        ? 'أنشئ بيانات تسجيل الدخول للموظف. سيتمكن من الوصول إلى النظام باستخدام اسم المستخدم وكلمة المرور.' 
+                        : 'Créez les identifiants de connexion de l\'employé. Il pourra accéder au système en utilisant ces informations.'}
+                    </p>
+                  </motion.div>
+
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-800">
                     <Label htmlFor="username" className="font-bold text-lg text-cyan-700 dark:text-cyan-400">
                       👤 {language === 'ar' ? 'اسم المستخدم' : 'Identifiant'}
                     </Label>
@@ -713,74 +897,76 @@ export default function Employees() {
                       id="username"
                       value={formData.username}
                       onChange={(e) => setFormData({...formData, username: e.target.value})}
-                      placeholder={language === 'ar' ? 'malami' : 'malami'}
+                      placeholder={language === 'ar' ? 'مثال: محمد_علامي' : 'Ex: mohamed.alami'}
                       className="border-2 border-cyan-300 dark:border-cyan-700 rounded-lg font-semibold"
                     />
                     <div className="text-sm text-cyan-600 dark:text-cyan-400 flex items-center gap-2">
                       <span>💡</span>
-                      {language === 'ar' ? 'للدخول إلى النظام' : 'Pour accéder au système'}
+                      {language === 'ar' ? 'يستخدم لتسجيل الدخول إلى النظام' : 'Utilisé pour se connecter au système'}
                     </div>
                   </motion.div>
 
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }} className="grid grid-cols-1 gap-4">
-                    <div className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-900/20 dark:to-pink-900/20 border-2 border-rose-200 dark:border-rose-800">
-                      <Label htmlFor="password" className="font-bold text-lg text-rose-700 dark:text-rose-400">
-                        🔒 {language === 'ar' ? 'كلمة المرور' : 'Mot de passe'}
-                      </Label>
-                      <div className="relative">
-                        <Input
-                          id="password"
-                          type={showPassword ? "text" : "password"}
-                          value={formData.password}
-                          onChange={(e) => setFormData({...formData, password: e.target.value})}
-                          placeholder={language === 'ar' ? 'كلمة مرور قوية' : 'Mot de passe sécurisé'}
-                          className="border-2 border-rose-300 dark:border-rose-700 rounded-lg font-semibold pr-10"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className={`${isRTL ? 'left-0' : 'right-0'} absolute top-0 h-full w-10 text-rose-600 hover:text-rose-700`}
-                          onClick={() => setShowPassword(!showPassword)}
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </Button>
-                      </div>
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-900/20 dark:to-pink-900/20 border-2 border-rose-200 dark:border-rose-800">
+                    <Label htmlFor="password" className="font-bold text-lg text-rose-700 dark:text-rose-400">
+                      🔒 {language === 'ar' ? 'كلمة المرور' : 'Mot de passe'}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="password"
+                        type={showPassword ? "text" : "password"}
+                        value={formData.password}
+                        onChange={(e) => setFormData({...formData, password: e.target.value})}
+                        placeholder={language === 'ar' ? 'كلمة مرور قوية' : 'Mot de passe sécurisé'}
+                        className="border-2 border-rose-300 dark:border-rose-700 rounded-lg font-semibold pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={`${isRTL ? 'left-0' : 'right-0'} absolute top-0 h-full w-10 text-rose-600 hover:text-rose-700`}
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
                     </div>
+                    <div className="text-sm text-rose-600 dark:text-rose-400 flex items-center gap-2">
+                      <span>🔐</span>
+                      {language === 'ar' ? 'استخدم حروف وأرقام ورموز خاصة' : 'Utilisez des majuscules, minuscules et chiffres'}
+                    </div>
+                  </motion.div>
 
-                    <div className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 border-2 border-violet-200 dark:border-violet-800">
-                      <Label htmlFor="confirmPassword" className="font-bold text-lg text-violet-700 dark:text-violet-400">
-                        ✓ {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirmer le mot de passe'}
-                      </Label>
-                      <div className="relative">
-                        <Input
-                          id="confirmPassword"
-                          type={showPassword ? "text" : "password"}
-                          value={formData.confirmPassword}
-                          onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
-                          placeholder={language === 'ar' ? 'أعد كتابة كلمة المرور' : 'Confirmez le mot de passe'}
-                          className="border-2 border-violet-300 dark:border-violet-700 rounded-lg font-semibold pr-10"
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className={`${isRTL ? 'left-0' : 'right-0'} absolute top-0 h-full w-10 text-violet-600 hover:text-violet-700`}
-                          onClick={() => setShowPassword(!showPassword)}
-                        >
-                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                        </Button>
-                      </div>
+                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 border-2 border-violet-200 dark:border-violet-800">
+                    <Label htmlFor="confirmPassword" className="font-bold text-lg text-violet-700 dark:text-violet-400">
+                      ✓ {language === 'ar' ? 'تأكيد كلمة المرور' : 'Confirmer le mot de passe'}
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        id="confirmPassword"
+                        type={showPassword ? "text" : "password"}
+                        value={formData.confirmPassword}
+                        onChange={(e) => setFormData({...formData, confirmPassword: e.target.value})}
+                        placeholder={language === 'ar' ? 'أعد كتابة كلمة المرور' : 'Confirmez le mot de passe'}
+                        className="border-2 border-violet-300 dark:border-violet-700 rounded-lg font-semibold pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={`${isRTL ? 'left-0' : 'right-0'} absolute top-0 h-full w-10 text-violet-600 hover:text-violet-700`}
+                        onClick={() => setShowPassword(!showPassword)}
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
                     </div>
                   </motion.div>
 
                   {formData.password && formData.confirmPassword && formData.password !== formData.confirmPassword && (
                     <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
                       className="flex items-center gap-3 p-4 rounded-lg bg-red-100 dark:bg-red-900/30 border-2 border-red-300 dark:border-red-700"
                     >
-                      <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+                      <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0" />
                       <span className="text-red-700 dark:text-red-400 font-semibold">
                         {language === 'ar' ? '⚠️ كلمات المرور غير متطابقة' : '⚠️ Les mots de passe ne correspondent pas'}
                       </span>
@@ -789,11 +975,11 @@ export default function Employees() {
 
                   {formData.password && formData.confirmPassword && formData.password === formData.confirmPassword && (
                     <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
                       className="flex items-center gap-3 p-4 rounded-lg bg-green-100 dark:bg-green-900/30 border-2 border-green-300 dark:border-green-700"
                     >
-                      <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
+                      <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0" />
                       <span className="text-green-700 dark:text-green-400 font-semibold">
                         ✅ {language === 'ar' ? 'كلمات المرور متطابقة' : 'Mots de passe correspondants'}
                       </span>
@@ -835,7 +1021,7 @@ export default function Employees() {
               📋 {language === 'ar' ? 'سجل الدفع' : 'Historique de paiements'}
             </DialogTitle>
             <DialogDescription className="text-base mt-2">
-              {language === 'ar' ? 'جميع المدفوعات المسجلة لـ' : 'Tous les paiements enregistrés pour'} <strong className="text-purple-600 dark:text-purple-400">{selectedEmployee?.name}</strong>
+              {language === 'ar' ? 'جميع المدفوعات المسجلة لـ' : 'Tous les paiements enregistrés pour'} <strong className="text-purple-600 dark:text-purple-400">{selectedEmployee?.full_name}</strong>
             </DialogDescription>
           </DialogHeader>
           
@@ -848,6 +1034,7 @@ export default function Employees() {
                       <TableHead className="font-bold">📅 {language === 'ar' ? 'التاريخ' : 'Date'}</TableHead>
                       <TableHead className="font-bold">📋 {language === 'ar' ? 'النوع' : 'Type'}</TableHead>
                       <TableHead className="text-right font-bold">💰 {language === 'ar' ? 'المبلغ' : 'Montant'}</TableHead>
+                      <TableHead className="text-center font-bold">⚙️ {language === 'ar' ? 'الإجراءات' : 'Actions'}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -861,6 +1048,32 @@ export default function Employees() {
                         </TableCell>
                         <TableCell className="text-right font-bold text-green-600 dark:text-green-400">
                           {formatCurrency(payment.amount)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={async () => {
+                              try {
+                                await deletePayment(String(payment.id));
+                                await fetchPaymentHistory(String(selectedEmployee?.id));
+                                toast({
+                                  title: language === 'ar' ? 'تم الحذف' : 'Deleted',
+                                  description: language === 'ar' ? 'تم حذف الدفعة بنجاح' : 'Payment deleted successfully',
+                                  variant: 'default'
+                                });
+                              } catch (err) {
+                                toast({
+                                  title: language === 'ar' ? 'خطأ' : 'Error',
+                                  description: language === 'ar' ? 'فشل حذف الدفعة' : 'Failed to delete payment',
+                                  variant: 'destructive'
+                                });
+                              }
+                            }}
+                            className="px-3 py-1 rounded-lg bg-red-100 hover:bg-red-200 dark:bg-red-900/40 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 font-bold text-sm"
+                          >
+                            🗑️ {language === 'ar' ? 'حذف' : 'Supprimer'}
+                          </motion.button>
                         </TableCell>
                       </TableRow>
                     ))}

@@ -322,6 +322,69 @@ export const deleteEmployee = async (id: string) => {
   if (error) throw error;
 };
 
+// ========== PAYMENTS (PAIEMENTS) ==========
+
+export const createPayment = async (payment: any) => {
+  const { data, error } = await supabase
+    .from('payments')
+    .insert([payment])
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+};
+
+export const getPaymentHistory = async (employeeId: string) => {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('employee_id', employeeId)
+    .order('date', { ascending: false });
+
+  if (error) throw error;
+  return data;
+};
+
+export const deletePayment = async (id: string) => {
+  const { error } = await supabase
+    .from('payments')
+    .delete()
+    .eq('id', id);
+
+  if (error) throw error;
+};
+
+export const getTotalPayments = async () => {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('amount');
+
+  if (error) throw error;
+  
+  // Sum all payment amounts
+  const total = data?.reduce((sum, payment) => sum + (payment.amount || 0), 0) || 0;
+  return total;
+};
+
+export const getPaymentsThisMonth = async () => {
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  
+  const { data, error } = await supabase
+    .from('payments')
+    .select('amount')
+    .gte('date', firstDay.toISOString().split('T')[0])
+    .lte('date', lastDay.toISOString().split('T')[0]);
+
+  if (error) throw error;
+  
+  // Sum all payment amounts for this month
+  const total = data?.reduce((sum, payment) => sum + (payment.amount || 0), 0) || 0;
+  return total;
+};
+
 // ========== STORES (MAGASINS) ==========
 
 export const getStores = async () => {
