@@ -12,6 +12,9 @@ import {
   Archive,
   Hash,
   FileText,
+  MoreVertical,
+  Grid,
+  Table as TableIcon,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -36,6 +39,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 import {
   Select,
   SelectContent,
@@ -249,6 +258,7 @@ export default function Inventory() {
   const [deleteDialog, setDeleteDialog] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showProductDetails, setShowProductDetails] = useState(false);
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
 
   // ================= LOAD DATA =================
   useEffect(() => {
@@ -348,7 +358,7 @@ export default function Inventory() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4"
+        className="mb-6 grid grid-cols-1 md:grid-cols-5 gap-4"
       >
         <div className="relative">
           <Search className="absolute left-3 top-3 text-slate-400 w-5 h-5" />
@@ -384,6 +394,31 @@ export default function Inventory() {
             <SelectItem value="out">{getText('filter_out', language)}</SelectItem>
           </SelectContent>
         </Select>
+
+        <div className="flex gap-2">
+          <Button
+            onClick={() => setViewMode('grid')}
+            className={`flex-1 h-11 rounded-xl ${
+              viewMode === 'grid'
+                ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+            }`}
+            title={language === 'ar' ? 'عرض الشبكة' : 'Vue Grille'}
+          >
+            <Grid className="w-5 h-5" />
+          </Button>
+          <Button
+            onClick={() => setViewMode('table')}
+            className={`flex-1 h-11 rounded-xl ${
+              viewMode === 'table'
+                ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+            }`}
+            title={language === 'ar' ? 'عرض الجدول' : 'Vue Tableau'}
+          >
+            <TableIcon className="w-5 h-5" />
+          </Button>
+        </div>
 
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -440,36 +475,15 @@ export default function Inventory() {
                       description: language === 'ar' ? 'تم تحديث المنتج' : 'Le produit a été mis à jour',
                     });
                   } else {
-                    // Create product without payment tracking fields
-                    // Payment tracking is handled separately via invoices
+                    // Create product without automatic invoice creation
+                    // Initial quantities are set directly in the product fields
                     const createdProduct = await createProduct(validProductData);
-                    
-                    // Automatically create a purchase invoice for the new product
-                    if (createdProduct && formData.supplier_id && formData.initial_quantity > 0) {
-                      try {
-                        await createPurchaseInvoice(
-                          formData.supplier_id,
-                          [
-                            {
-                              product_id: createdProduct.id,
-                              product_name: createdProduct.name,
-                              quantity: formData.initial_quantity,
-                              unit_price: formData.buying_price,
-                            },
-                          ],
-                          `Initial stock for new product: ${createdProduct.name}`
-                        );
-                      } catch (invoiceError) {
-                        console.error('Error creating purchase invoice:', invoiceError);
-                        // Don't fail the product creation if invoice creation fails
-                      }
-                    }
                     
                     toast({
                       title: getText('product_added', language),
                       description: (language === 'ar'
-                        ? 'تمت إضافة المنتج وفاتورة الشراء بنجاح'
-                        : 'Le produit et la facture d\'achat ont été ajoutés avec succès'),
+                        ? 'تمت إضافة المنتج بنجاح'
+                        : 'Le produit a été ajouté avec succès'),
                     });
                   }
                   setDialogOpen(false);
@@ -538,7 +552,7 @@ export default function Inventory() {
         </Dialog>
       </motion.div>
 
-      {/* Products Grid */}
+      {/* Products Grid or Table */}
       {loading ? (
         <div className="flex justify-center items-center h-96">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -552,7 +566,129 @@ export default function Inventory() {
           <Package className="w-16 h-16 mx-auto text-slate-300 mb-4" />
           <p className="text-slate-500 text-lg">{getText('no_products', language)}</p>
         </motion.div>
+      ) : viewMode === 'table' ? (
+        // TABLE VIEW
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="overflow-x-auto rounded-xl border border-slate-200 shadow-lg"
+        >
+          <table className="w-full bg-white">
+            <thead className="bg-gradient-to-r from-blue-50 to-emerald-50 border-b border-slate-200">
+              <tr>
+                <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">📦 {language === 'ar' ? 'المنتج' : 'Produit'}</th>
+                <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">📂 {language === 'ar' ? 'الفئة' : 'Catégorie'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">💵 {language === 'ar' ? 'الشراء' : 'Achat'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">💰 {language === 'ar' ? 'البيع' : 'Vente'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📊 {language === 'ar' ? 'الحالي' : 'Actuel'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📦 {language === 'ar' ? 'الأولي' : 'Initial'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">⚠️ {language === 'ar' ? 'الحد الأدنى' : 'Minimum'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📍 {language === 'ar' ? 'الحالة' : 'Statut'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">⚙️</th>
+              </tr>
+            </thead>
+            <tbody>
+              <AnimatePresence>
+                {filteredProducts.map((product, idx) => {
+                  const status = getStockStatus(product.current_quantity, product.min_quantity);
+                  const statusColor =
+                    status === 'ok'
+                      ? 'bg-green-100 text-green-700'
+                      : status === 'low'
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-red-100 text-red-700';
+                  const statusText =
+                    status === 'ok'
+                      ? getText('ok_stock', language)
+                      : status === 'low'
+                        ? getText('low_stock', language)
+                        : getText('out_of_stock', language);
+
+                  return (
+                    <motion.tr
+                      key={product.id}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className={`border-b border-slate-200 hover:bg-slate-50 transition-colors ${
+                        idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'
+                      }`}
+                    >
+                      <td className="px-4 py-3 font-semibold text-slate-800 max-w-xs truncate">
+                        <div className="flex flex-col">
+                          <span>{product.name}</span>
+                          {product.barcode && (
+                            <span className="text-xs text-slate-500">🔲 {product.barcode}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-600">
+                        {product.category?.name || '-'}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-blue-700">
+                        {product.buying_price.toFixed(2)} DZD
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-emerald-700">
+                        {product.selling_price.toFixed(2)} DZD
+                      </td>
+                      <td className="px-4 py-3 text-center font-bold text-purple-700">
+                        {product.current_quantity}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-slate-700">
+                        {product.initial_quantity}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-orange-700">
+                        {product.min_quantity}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge className={statusColor}>{statusText}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 hover:bg-slate-200"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setSelectedProduct(product);
+                                setShowProductDetails(true);
+                              }}
+                            >
+                              👁️ {language === 'ar' ? 'عرض التفاصيل' : 'Voir Détails'}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setEditingProduct(product);
+                                setDialogOpen(true);
+                              }}
+                            >
+                              ✏️ {getText('edit', language)}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => setDeleteDialog(product.id)}
+                              className="text-red-600 cursor-pointer"
+                            >
+                              🗑️ {getText('delete', language)}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </AnimatePresence>
+            </tbody>
+          </table>
+        </motion.div>
       ) : (
+        // GRID VIEW
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

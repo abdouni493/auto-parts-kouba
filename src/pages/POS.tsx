@@ -15,7 +15,8 @@ import {
   Car,
   AlertCircle,
   Store,
-  Sparkles
+  Sparkles,
+  MoreVertical,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,6 +46,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { supabase, getProducts, getStores } from '@/lib/supabaseClient';
@@ -137,7 +144,14 @@ export default function POS() {
     type: 'fixed'
   });
   const [stores, setStores] = useState<Store[]>([]);
-  const [selectedStore, setSelectedStore] = useState<string>('');
+  const [selectedStore, setSelectedStore] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem('posSelectedStoreId') || '';
+  });
+  const [isStorePinned, setIsStorePinned] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('posStorePinned') === 'true';
+  });
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -146,8 +160,17 @@ export default function POS() {
     try {
       const data = await getStores();
       setStores(data);
+
+      const savedStoreId = typeof window !== 'undefined' ? localStorage.getItem('posSelectedStoreId') : null;
+      const savedPinned = typeof window !== 'undefined' ? localStorage.getItem('posStorePinned') === 'true' : false;
+      setIsStorePinned(savedPinned);
+
       if (data.length > 0) {
-        setSelectedStore(data[0].id);
+        if (savedPinned && savedStoreId && data.some((s) => s.id === savedStoreId)) {
+          setSelectedStore(savedStoreId);
+        } else if (!savedStoreId || !data.some((s) => s.id === savedStoreId)) {
+          setSelectedStore(data[0].id);
+        }
       }
     } catch (error) {
       console.error('Error fetching stores:', error);
@@ -191,6 +214,17 @@ export default function POS() {
     fetchStores();
     fetchProducts();
   }, []);
+
+  // Persist selected store when pin is enabled
+  useEffect(() => {
+    if (isStorePinned && selectedStore) {
+      localStorage.setItem('posSelectedStoreId', selectedStore);
+      localStorage.setItem('posStorePinned', 'true');
+    } else {
+      localStorage.removeItem('posSelectedStoreId');
+      localStorage.setItem('posStorePinned', 'false');
+    }
+  }, [isStorePinned, selectedStore]);
 
   // Search with store filtering
   useEffect(() => {
@@ -511,6 +545,19 @@ export default function POS() {
                 ))}
               </SelectContent>
             </Select>
+
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                id="pin-store"
+                type="checkbox"
+                checked={isStorePinned}
+                onChange={(e) => setIsStorePinned(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <label htmlFor="pin-store" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                {language === 'ar' ? 'تثبيت اختيار المتجر' : 'Épingler le magasin'}
+              </label>
+            </div>
           </motion.div>
         </motion.div>
 
@@ -589,75 +636,84 @@ export default function POS() {
                       </p>
                     </motion.div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[650px] overflow-y-auto pr-2">
-                      {filteredProducts.map((product, idx) => (
-                        <motion.div
-                          key={product.id}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: idx * 0.05 }}
-                          whileHover={{ scale: 1.05, translateY: -5 }}
-                          onClick={() => addToCart(product)}
-                        >
-                          <Card className="cursor-pointer h-full bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-slate-700 dark:to-slate-600 border-2 border-blue-200 dark:border-blue-600 hover:border-blue-500 dark:hover:border-blue-400 shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden group">
-                            <CardContent className="p-4 space-y-3 h-full flex flex-col">
-                              {/* Product Header */}
-                              <div className="flex justify-between items-start gap-2 flex-1">
-                                <h3 className="font-bold text-base line-clamp-2 text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                  {product.name}
-                                </h3>
-                                <Badge 
-                                  className={`px-3 py-1 rounded-full font-bold text-sm flex-shrink-0 ${
-                                    product.current_quantity > product.min_quantity
-                                      ? 'bg-gradient-to-r from-green-400 to-emerald-500 text-white'
-                                      : 'bg-gradient-to-r from-red-400 to-pink-500 text-white'
+                    <div className="max-h-[650px] overflow-y-auto rounded-lg border border-purple-200 dark:border-purple-700">
+                      <table className="w-full bg-white dark:bg-slate-700">
+                        <thead className="bg-gradient-to-r from-purple-50 to-blue-50 dark:from-slate-700 dark:to-slate-600 border-b border-purple-200 dark:border-purple-700 sticky top-0">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700 dark:text-slate-300">📦 {language === 'ar' ? 'المنتج' : 'Produit'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">🏷️ {language === 'ar' ? 'العلامة' : 'Marque'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">💰 {language === 'ar' ? 'السعر' : 'Prix'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📊 {language === 'ar' ? 'المخزون' : 'Stock'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⚙️</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <AnimatePresence>
+                            {filteredProducts.map((product, idx) => {
+                              const isLowStock = product.current_quantity < product.min_quantity;
+                              return (
+                                <motion.tr
+                                  key={product.id}
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  className={`border-b border-purple-100 dark:border-slate-600 hover:bg-purple-50 dark:hover:bg-slate-600 transition-colors cursor-pointer ${
+                                    idx % 2 === 0 ? 'bg-white dark:bg-slate-750' : 'bg-purple-50/30 dark:bg-slate-700/30'
                                   }`}
+                                  onClick={() => addToCart(product)}
                                 >
-                                  {product.current_quantity}
-                                </Badge>
-                              </div>
-
-                              {/* Description */}
-                              {product.description && (
-                                <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2 italic">
-                                  📝 {product.description}
-                                </p>
-                              )}
-
-                              {/* Brand and Barcode */}
-                              {product.brand && (
-                                <p className="text-sm text-slate-600 dark:text-slate-300 font-medium">
-                                  🏷️ {product.brand}
-                                </p>
-                              )}
-                              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono border-t border-blue-200 dark:border-slate-500 pt-2">
-                                📍 {product.barcode}
-                              </p>
-
-                              {/* Price Section */}
-                              <div className="border-t border-blue-200 dark:border-slate-500 pt-3 mt-auto space-y-2">
-                                <div className="flex items-baseline justify-between">
-                                  <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">{language === 'ar' ? '💰 السعر الحالي' : '💰 Prix Actuel'}</span>
-                                  <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                                  <td className="px-4 py-3 font-semibold text-slate-800 dark:text-white max-w-xs">
+                                    <div className="flex flex-col">
+                                      <span className="truncate">{product.name}</span>
+                                      {product.barcode && (
+                                        <span className="text-xs text-slate-500 dark:text-slate-400">📍 {product.barcode}</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 text-center">
+                                    {product.brand || '-'}
+                                  </td>
+                                  <td className="px-4 py-3 text-center font-bold text-blue-700 dark:text-blue-400">
                                     {formatCurrencyLocal(product.selling_price, language)}
-                                  </span>
-                                </div>
-                                {product.last_price_to_sell && product.last_price_to_sell > 0 ? (
-                                  <div className="flex items-baseline justify-between">
-                                    <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">{language === 'ar' ? '⏱️ آخر سعر' : '⏱️ Dernier Prix'}</span>
-                                    <span className="text-lg font-bold text-purple-600 dark:text-purple-400">
-                                      {formatCurrencyLocal(product.last_price_to_sell, language)}
-                                    </span>
-                                  </div>
-                                ) : null}
-                                <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-                                  ✨ {language === 'ar' ? 'انقر للإضافة' : 'Cliquez pour ajouter'}
-                                </p>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
-                      ))}
+                                  </td>
+                                  <td className="px-4 py-3 text-center">
+                                    <Badge 
+                                      className={`${
+                                        isLowStock
+                                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                          : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                      }`}
+                                    >
+                                      {product.current_quantity}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0 hover:bg-purple-200 dark:hover:bg-slate-600"
+                                        >
+                                          <MoreVertical className="w-4 h-4" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem
+                                          onClick={() => addToCart(product)}
+                                          className="cursor-pointer"
+                                        >
+                                          ➕ {language === 'ar' ? 'إضافة للسلة' : 'Ajouter au Panier'}
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </td>
+                                </motion.tr>
+                              );
+                            })}
+                          </AnimatePresence>
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </CardContent>
