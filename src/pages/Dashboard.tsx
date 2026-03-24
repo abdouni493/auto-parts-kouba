@@ -244,6 +244,8 @@ export default function Dashboard() {
   const [lowStockProducts, setLowStockProducts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [storeName, setStoreName] = useState('Auto Parts');
+  const [storeDisplayName, setStoreDisplayName] = useState('');
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -294,6 +296,14 @@ export default function Dashboard() {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    // Load store name from localStorage
+    const localStoreName = localStorage.getItem('storeName');
+    const localStoreDisplayName = localStorage.getItem('storeDisplayName');
+    if (localStoreName) setStoreName(localStoreName);
+    if (localStoreDisplayName) setStoreDisplayName(localStoreDisplayName);
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -368,11 +378,16 @@ export default function Dashboard() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
             <div>
               <h1 className="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500">
-                🏭 AUTO PARTS KOUBA
+                🏭 {storeDisplayName || storeName}
               </h1>
               <p className="text-lg text-gray-600 dark:text-gray-300 mt-2">
                 Système de gestion complet • <span className="font-semibold text-blue-600">{user?.name || user?.username || 'Admin'}</span>
               </p>
+              {storeName && (
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  🏪 Magasin: <span className="font-semibold text-slate-700 dark:text-slate-300">{storeName}</span>
+                </p>
+              )}
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 ⏰ {new Date().toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
               </p>

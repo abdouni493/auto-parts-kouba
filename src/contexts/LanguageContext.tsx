@@ -51,6 +51,7 @@ const translations = {
     // Settings
     'settings.title': 'Paramètres',
     'settings.subtitle': 'Configurez votre application',
+    'settings_title': 'Paramètres',
     'settings.backup': 'Sauvegarde',
     'settings.restore': 'Restaurer',
     'settings.language': 'Langue de l\'interface',
@@ -112,6 +113,7 @@ const translations = {
     // Settings
     'settings.title': 'الإعدادات',
     'settings.subtitle': 'قم بتكوين التطبيق الخاص بك',
+    'settings_title': 'الإعدادات',
     'settings.backup': 'نسخ احتياطي',
     'settings.restore': 'استعادة',
     'settings.language': 'لغة الواجهة',

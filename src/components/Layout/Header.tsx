@@ -34,14 +34,14 @@ export const Header = ({ onMenuClick, sidebarOpen }: HeaderProps) => {
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [storeDisplayName, setStoreDisplayName] = useState('Auto Parts');
-  const [storeLogoUrl, setStoreLogoUrl] = useState('');
+  const [storeLogoData, setStoreLogoData] = useState('');
 
   useEffect(() => {
     const savedName = localStorage.getItem('storeDisplayName');
-    const savedLogo = localStorage.getItem('storeLogoUrl');
+    const savedLogo = localStorage.getItem('storeLogoData');
 
     if (savedName) setStoreDisplayName(savedName);
-    if (savedLogo) setStoreLogoUrl(savedLogo);
+    if (savedLogo) setStoreLogoData(savedLogo);
   }, []);
 
   const { logout, user } = useAuth();          // ✅ get logout and user from context
@@ -81,8 +81,8 @@ export const Header = ({ onMenuClick, sidebarOpen }: HeaderProps) => {
           </Button>
 
           <div className="hidden sm:flex items-center gap-2">
-            {storeLogoUrl ? (
-              <img src={storeLogoUrl} alt="Logo magasin" className="w-8 h-8 rounded-sm object-cover border" />
+            {storeLogoData ? (
+              <img src={storeLogoData} alt="Logo magasin" className="w-8 h-8 rounded-sm object-cover border" />
             ) : (
               <div className="w-8 h-8 rounded-sm bg-blue-200 flex items-center justify-center">🚗</div>
             )}

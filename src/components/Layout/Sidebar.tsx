@@ -15,16 +15,16 @@ export const Sidebar = ({ isOpen }: SidebarProps) => {
 
   const [storeName, setStoreName] = useState('Auto Parts');
   const [storeDisplayName, setStoreDisplayName] = useState('Auto Parts');
-  const [storeLogoUrl, setStoreLogoUrl] = useState('');
+  const [storeLogoData, setStoreLogoData] = useState('');
 
   useEffect(() => {
     const localStoreName = localStorage.getItem('storeName');
     const localDisplayName = localStorage.getItem('storeDisplayName');
-    const localLogoUrl = localStorage.getItem('storeLogoUrl');
+    const localLogoData = localStorage.getItem('storeLogoData');
 
     if (localStoreName) setStoreName(localStoreName);
     if (localDisplayName) setStoreDisplayName(localDisplayName);
-    if (localLogoUrl) setStoreLogoUrl(localLogoUrl);
+    if (localLogoData) setStoreLogoData(localLogoData);
   }, []);
 
   const navigationItems = [
@@ -59,8 +59,8 @@ export const Sidebar = ({ isOpen }: SidebarProps) => {
       <div className="p-6 border-b border-blue-200 dark:border-slate-700 bg-gradient-to-r from-blue-100 to-cyan-100 dark:from-slate-800 dark:to-slate-700">
         <div className={`flex items-center gap-3 ${isRTL ? 'flex-row-reverse' : ''}`}>
           <div className="w-12 h-12 rounded-xl overflow-hidden shadow-lg border border-white/50 bg-white flex items-center justify-center">
-            {storeLogoUrl ? (
-              <img src={storeLogoUrl} alt="Logo magasin" className="w-full h-full object-cover" />
+            {storeLogoData ? (
+              <img src={storeLogoData} alt="Logo magasin" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white font-bold text-xl">🚗</div>
             )}

@@ -390,7 +390,7 @@ export const getPaymentsThisMonth = async () => {
 export const getStores = async () => {
   const { data, error } = await supabase
     .from('stores')
-    .select('*')
+    .select('id, name, display_name, logo_data, address, phone, email, city, country, is_active, created_by, created_at, updated_at')
     .eq('is_active', true)
     .order('created_at', { ascending: false });
 
@@ -549,5 +549,149 @@ export const getDashboardStats = async () => {
   } catch (error) {
     console.error('Get dashboard stats error:', error);
     throw error;
+  }
+};
+
+// ========== USER PROFILE & SYSTEM INFO ==========
+
+export const getUserProfile = async () => {
+  try {
+    const { data: authUser } = await supabase.auth.getUser();
+    if (!authUser.user) return null;
+
+    // First try to get existing profile
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', authUser.user.id)
+      .single();
+
+    if (error && error.code === 'PGRST116') {
+      // User profile doesn't exist, create one
+      console.log('User profile not found, creating new profile...');
+      const { data: newProfile, error: createError } = await supabase
+        .from('users')
+        .insert([
+          {
+            id: authUser.user.id,
+            email: authUser.user.email,
+            username: authUser.user.email?.split('@')[0] || 'user',
+            role: 'admin',
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Failed to create user profile:', createError);
+        // Return basic auth user info as fallback
+        return {
+          id: authUser.user.id,
+          email: authUser.user.email,
+          username: authUser.user.email?.split('@')[0] || 'user',
+          role: 'admin'
+        };
+      }
+
+      return newProfile;
+    }
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Get user profile error:', error);
+    // Return basic auth user info as fallback
+    const { data: authUser } = await supabase.auth.getUser();
+    return authUser.user ? {
+      id: authUser.user.id,
+      email: authUser.user.email,
+      username: authUser.user.email?.split('@')[0] || 'user',
+      role: 'admin'
+    } : null;
+  }
+};
+
+export const updateUserProfile = async (updates: { username?: string }) => {
+  try {
+    const { data: authUser } = await supabase.auth.getUser();
+    if (!authUser.user) throw new Error('User not authenticated');
+
+    // First check if profile exists
+    const { data: existingProfile } = await supabase
+      .from('users')
+      .select('id')
+      .eq('id', authUser.user.id)
+      .single();
+
+    if (!existingProfile) {
+      // Create profile if it doesn't exist
+      const { data, error } = await supabase
+        .from('users')
+        .insert([
+          {
+            id: authUser.user.id,
+            email: authUser.user.email,
+            username: updates.username || authUser.user.email?.split('@')[0] || 'user',
+            role: 'admin',
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } else {
+      // Update existing profile
+      const { data, error } = await supabase
+        .from('users')
+        .update(updates)
+        .eq('id', authUser.user.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    }
+  } catch (error) {
+    console.error('Update user profile error:', error);
+    throw error;
+  }
+};
+
+export const getSystemInfo = async () => {
+  try {
+    // Get database size (approximate)
+    const { data: products, error: productsError } = await supabase
+      .from('products')
+      .select('id', { count: 'exact' });
+
+    if (productsError) throw productsError;
+
+    // Get last backup info (we'll use a simple timestamp for now)
+    const lastBackup = localStorage.getItem('lastBackup') || 'Jamais';
+
+    // Calculate approximate database size (rough estimate)
+    const dbSize = (products?.length || 0) * 1024; // Rough estimate: 1KB per product
+
+    return {
+      version: '1.0.0',
+      database: 'Supabase',
+      lastBackup,
+      diskSpace: `${(dbSize / 1024 / 1024).toFixed(2)} MB`,
+      uptime: 'N/A', // Supabase handles this
+      networkStatus: 'connected'
+    };
+  } catch (error) {
+    console.error('Get system info error:', error);
+    return {
+      version: '1.0.0',
+      database: 'Supabase',
+      lastBackup: 'N/A',
+      diskSpace: 'N/A',
+      uptime: 'N/A',
+      networkStatus: 'disconnected'
+    };
   }
 };
