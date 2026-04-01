@@ -581,7 +581,8 @@ export default function Inventory() {
                 <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📝 {language === 'ar' ? 'الوصف' : 'Description'}</th>
                 <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">💵 {language === 'ar' ? 'الشراء' : 'Achat'}</th>
                 <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">💰 {language === 'ar' ? 'البيع' : 'Vente'}</th>
-                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📊 {language === 'ar' ? 'الحالي' : 'Actuel'} ⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">📊 {language === 'ar' ? 'الحالي' : 'Actuel'}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
                 <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">⚙️</th>
               </tr>
             </thead>
@@ -632,11 +633,11 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-center font-semibold text-emerald-700">
                         {product.selling_price.toFixed(2)} DZD
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        <div className="flex flex-col items-center">
-                          <span className="font-bold text-purple-700">{product.current_quantity}</span>
-                          <span className="text-xs text-slate-500">({(product.last_price_to_sell || product.selling_price).toFixed(2)} DZD)</span>
-                        </div>
+                      <td className="px-4 py-3 text-center font-bold text-purple-700">
+                        {product.current_quantity}
+                      </td>
+                      <td className="px-4 py-3 text-center font-semibold text-purple-700">
+                        {(product.last_price_to_sell || product.selling_price).toFixed(2)} DZD
                       </td>
                       <td className="px-4 py-3 text-center">
                         <DropdownMenu>

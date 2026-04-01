@@ -644,7 +644,8 @@ export default function POS() {
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">🏷️ {language === 'ar' ? 'العلامة' : 'Marque'}</th>
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📝 {language === 'ar' ? 'الوصف' : 'Description'}</th>
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">💰 {language === 'ar' ? 'البيع' : 'Vente'}</th>
-                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📊 {language === 'ar' ? 'الحالي' : 'Actuel'} ⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📊 {language === 'ar' ? 'الحالي' : 'Actuel'}</th>
+                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⚙️</th>
                           </tr>
                         </thead>
@@ -681,18 +682,18 @@ export default function POS() {
                                     {formatCurrencyLocal(product.selling_price, language)}
                                   </td>
                                   <td className="px-4 py-3 text-center">
-                                    <div className="flex flex-col items-center">
-                                      <Badge 
-                                        className={`${
-                                          isLowStock
-                                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                                            : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                                        }`}
-                                      >
-                                        {product.current_quantity}
-                                      </Badge>
-                                      <span className="text-xs text-slate-500 dark:text-slate-400 mt-1">({formatCurrencyLocal(product.last_price_to_sell || product.selling_price, language)})</span>
-                                    </div>
+                                    <Badge 
+                                      className={`${
+                                        isLowStock
+                                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                                          : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                                      }`}
+                                    >
+                                      {product.current_quantity}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-3 text-center text-sm font-semibold text-purple-700 dark:text-purple-400">
+                                    {formatCurrencyLocal(product.last_price_to_sell || product.selling_price, language)}
                                   </td>
                                   <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                                     <DropdownMenu>
