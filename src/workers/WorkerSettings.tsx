@@ -1,24 +1,26 @@
-// src/workers/WorkerSettings.tsx
-
 import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import {
+  Settings as SettingsIcon,
   Globe,
+  Database,
   User,
   Shield,
+  Bell,
+  Download,
+  Upload,
+  Save,
   Eye,
   EyeOff,
   RefreshCw,
-  Save,
+  Printer,
   Info,
-  Database
+  Lock,
+  LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useToast } from '@/hooks/use-toast';
-import { useNavigate } from 'react-router-dom';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -27,376 +29,490 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
+import { useToast } from '@/hooks/use-toast';
+import { useLanguage } from '@/contexts/LanguageContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase, getUserProfile, getSystemInfo, getStores, updateUserProfile, getEmployeeByEmail } from '@/lib/supabaseClient';
+import { useNavigate } from 'react-router-dom';
 
-// ✅ import real contexts
-import { useAuth } from "@/contexts/AuthContext";
-import { useLanguage } from "@/contexts/LanguageContext";
-
-import axios from "axios";
-
-const API_URL = "http://localhost:5000/api"; // adjust if your server runs elsewhere
-
-function WorkerSettings() {
+export default function WorkerSettings() {
   const { toast } = useToast();
-  const { user } = useAuth(); // ✅ get logged in worker
-  const { language, setLanguage, t } = useLanguage();
+  const { language, setLanguage, t, isRTL } = useLanguage();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
 
   const [settings, setSettings] = useState({
-    username: user?.username || '',
+    username: user?.username || 'Employé',
+    email: user?.email || '',
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
+    notifications: true,
   });
 
   const [showPasswords, setShowPasswords] = useState({
     current: false,
     new: false,
-    confirm: false,
+    confirm: false
   });
 
-  const systemInfo = {
-    networkStatus: 'connected',
-  };
+  const [systemInfo, setSystemInfo] = useState({
+    version: '1.0.0',
+    lastLogin: '',
+    language: 'fr',
+  });
 
-  // ✅ Load worker profile
+  const [storeSettings, setStoreSettings] = useState({
+    name: '',
+    display_name: '',
+  });
+
+  const [isLoading, setIsLoading] = useState(true);
+
   useEffect(() => {
-    if (user) {
-      axios
-        .get(`${API_URL}/workers/${user.id}`)
-        .then((res) => {
-          setSettings((prev) => ({
-            ...prev,
-            username: res.data.username,
-          }));
-        })
-        .catch((err) => console.error("Error fetching worker profile:", err));
-    }
-  }, [user]);
+    const fetchData = async () => {
+      try {
+        if (user?.email) {
+          const employee = await getEmployeeByEmail(user.email);
+          if (employee?.store_id) {
+            const storeRes = await supabase
+              .from('stores')
+              .select('name')
+              .eq('id', employee.store_id)
+              .single();
+            
+            if (storeRes.data?.name) {
+              setStoreSettings({
+                name: storeRes.data.name,
+                display_name: storeRes.data.name,
+              });
+            }
+          }
+        }
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { id, value } = e.target;
-    setSettings((prev) => ({ ...prev, [id]: value }));
-  };
+        setSettings(prev => ({
+          ...prev,
+          username: user?.username || 'Employé',
+          email: user?.email || '',
+        }));
+
+        setSystemInfo({
+          version: '1.0.0',
+          lastLogin: new Date().toLocaleDateString('fr-FR'),
+          language: language || 'fr',
+        });
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user, language]);
 
   const togglePasswordVisibility = (field: 'current' | 'new' | 'confirm') => {
-    setShowPasswords((prev) => ({ ...prev, [field]: !prev[field] }));
+    setShowPasswords(prev => ({ ...prev, [field]: !prev[field] }));
   };
 
-  // ✅ Update profile
-  const handleUpdateProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      if (user) {
-        await axios.put(`${API_URL}/workers/${user.id}`, {
-          username: settings.username,
-        });
-
-        toast({
-          title: "Profile Updated",
-          description: "Your profile has been updated successfully.",
-        });
-      }
-    } catch (error) {
-      console.error("Error updating profile:", error);
-      toast({
-        title: "Update Failed",
-        description: "An error occurred while updating your profile.",
-        variant: "destructive",
-      });
-    }
+  const handleInputChange = (field: string, value: string | boolean) => {
+    setSettings(prev => ({ ...prev, [field]: value }));
   };
 
-  // ✅ Change password
-  const handlePasswordChange = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const { currentPassword, newPassword, confirmPassword } = settings;
-
-    if (newPassword !== confirmPassword) {
-      toast({
-        title: "Password Mismatch",
-        description: "New password and confirmation do not match.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    try {
-      await axios.put(`${API_URL}/workers/${user.id}/password`, {
-        currentPassword,
-        newPassword,
-      });
-
-      toast({
-        title: "Password Changed",
-        description: "Your password has been updated successfully.",
-      });
-      setSettings((prev) => ({
-        ...prev,
-        currentPassword: '',
-        newPassword: '',
-        confirmPassword: '',
-      }));
-    } catch (error) {
-      console.error("Error changing password:", error);
-      toast({
-        title: "Change Failed",
-        description: "An error occurred while changing your password. Please check your current password.",
-        variant: "destructive",
-      });
-    }
+  const handleLogout = async () => {
+    logout();
+    navigate('/login');
+    toast({
+      title: 'Déconnecté',
+      description: 'Vous avez été déconnecté avec succès.'
+    });
   };
+
+  const handleLanguageChange = (newLanguage: string) => {
+    setLanguage(newLanguage);
+    localStorage.setItem('language', newLanguage);
+    setSystemInfo(prev => ({ ...prev, language: newLanguage }));
+    toast({
+      title: '✅ Langue changée',
+      description: `La langue a été changée en ${newLanguage === 'ar' ? 'Arabe' : 'Français'}`
+    });
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-cyan-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+        <RefreshCw className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-10 py-6 px-4 md:px-6 lg:px-8 animate-fade-in">
-      <div className="pb-6 border-b border-border">
-        <h1 className="text-4xl font-extrabold text-gradient tracking-tight">
-          {t('nav.settings')}
-        </h1>
-        <p className="text-lg text-muted-foreground mt-1">
-          {language === 'ar'
-            ? 'تكوين حسابك الشخصي واللغة.'
-            : 'Configure your personal account and language settings.'}
-        </p>
-      </div>
+    <div className={`min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-cyan-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 space-y-8 py-8 px-4 md:px-6 lg:px-8 ${isRTL ? 'rtl' : ''}`}>
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden"
+      >
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 to-cyan-500/10 blur-3xl" />
+        <div className="relative rounded-3xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-8 shadow-2xl">
+          <h1 className="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500">
+            ⚙️ Paramètres Employé
+          </h1>
+          <p className="text-lg text-gray-600 dark:text-gray-300 mt-2">
+            Gérez vos préférences et paramètres personnels
+          </p>
+        </div>
+      </motion.div>
 
-      <Tabs defaultValue="profile">
-        <TabsList className="grid w-full grid-cols-2 lg:w-fit lg:grid-cols-4">
-          <TabsTrigger value="profile" className="flex items-center gap-2">
-            <User className="h-4 w-4" />
-            {language === 'ar' ? 'الملف الشخصي' : 'Profile'}
-          </TabsTrigger>
-          <TabsTrigger value="security" className="flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            {language === 'ar' ? 'الأمان' : 'Security'}
-          </TabsTrigger>
-          <TabsTrigger value="language" className="flex items-center gap-2">
-            <Globe className="h-4 w-4" />
-            {language === 'ar' ? 'اللغة' : 'Language'}
-          </TabsTrigger>
-          <TabsTrigger value="about" className="flex items-center gap-2">
-            <Info className="h-4 w-4" />
-            {language === 'ar' ? 'حول' : 'About'}
-          </TabsTrigger>
-        </TabsList>
+      {/* Tabs */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="rounded-2xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-6 shadow-lg bg-gradient-to-br from-white/40 dark:from-white/5 to-white/20 dark:to-white/10"
+      >
+        <Tabs defaultValue="profil" className="w-full">
+          <TabsList className="grid w-full grid-cols-1 md:grid-cols-4 gap-2 mb-8">
+            <TabsTrigger value="profil" className="flex items-center gap-2">
+              <User className="h-4 w-4" />
+              👤 Profil
+            </TabsTrigger>
+            <TabsTrigger value="magasin" className="flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              🏪 Magasin
+            </TabsTrigger>
+            <TabsTrigger value="securite" className="flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              🔒 Sécurité
+            </TabsTrigger>
+            <TabsTrigger value="preferences" className="flex items-center gap-2">
+              <SettingsIcon className="h-4 w-4" />
+              ⚡ Préférences
+            </TabsTrigger>
+          </TabsList>
 
-        {/* Profile Tab */}
-        <TabsContent value="profile" className="mt-6 animate-fade-in">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <User className="h-5 w-5" />
-                {t('profile.title')}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleUpdateProfile} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="username">{t('profile.username')}</Label>
-                  <Input
-                    id="username"
-                    value={settings.username}
-                    onChange={handleInputChange}
-                    placeholder={language === 'ar' ? 'اسم المستخدم' : 'Your username'}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">{t('profile.email')}</Label>
-                  <Input
-                    id="email"
-                    value={user?.email || ''}
-                    disabled
-                    placeholder={language === 'ar' ? 'البريد الإلكتروني' : 'Your email address'}
-                  />
-                </div>
-                <Button type="submit" className="w-full">
-                  <Save className="mr-2 h-4 w-4" />
-                  {t('profile.save')}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Security Tab */}
-        <TabsContent value="security" className="mt-6 animate-fade-in">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5" />
-                {t('security.title')}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handlePasswordChange} className="space-y-4">
-                {/* Current Password */}
-                <div className="space-y-2">
-                  <Label htmlFor="currentPassword">{t('security.current_password')}</Label>
-                  <div className="relative">
+          {/* Profile Tab */}
+          <TabsContent value="profil" className="space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="grid grid-cols-1 md:grid-cols-2 gap-6"
+            >
+              <Card className="border-blue-200 dark:border-blue-800">
+                <CardHeader className="bg-gradient-to-r from-blue-500/10 to-cyan-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <User className="h-5 w-5" />
+                    Informations Personnelles
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-6">
+                  <div>
+                    <Label className="text-sm font-semibold">Nom d'utilisateur</Label>
                     <Input
-                      id="currentPassword"
-                      type={showPasswords.current ? "text" : "password"}
-                      value={settings.currentPassword}
-                      onChange={handleInputChange}
-                      placeholder={language === 'ar' ? 'كلمة المرور الحالية' : 'Enter your current password'}
+                      id="username"
+                      value={settings.username}
+                      onChange={(e) => handleInputChange('username', e.target.value)}
+                      className="mt-2 border-blue-200 focus:border-blue-500"
+                      disabled
                     />
-                    <div
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer"
-                      onClick={() => togglePasswordVisibility('current')}
-                    >
-                      {showPasswords.current ? (
-                        <EyeOff className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                  </div>
-                </div>
-                {/* New Password */}
-                <div className="space-y-2">
-                  <Label htmlFor="newPassword">{t('security.new_password')}</Label>
-                  <div className="relative">
-                    <Input
-                      id="newPassword"
-                      type={showPasswords.new ? "text" : "password"}
-                      value={settings.newPassword}
-                      onChange={handleInputChange}
-                      placeholder={language === 'ar' ? 'كلمة المرور الجديدة' : 'Enter your new password'}
-                    />
-                    <div
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer"
-                      onClick={() => togglePasswordVisibility('new')}
-                    >
-                      {showPasswords.new ? (
-                        <EyeOff className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                  </div>
-                </div>
-                {/* Confirm Password */}
-                <div className="space-y-2">
-                  <Label htmlFor="confirmPassword">{t('security.confirm_password')}</Label>
-                  <div className="relative">
-                    <Input
-                      id="confirmPassword"
-                      type={showPasswords.confirm ? "text" : "password"}
-                      value={settings.confirmPassword}
-                      onChange={handleInputChange}
-                      placeholder={language === 'ar' ? 'تأكيد كلمة المرور الجديدة' : 'Confirm your new password'}
-                    />
-                    <div
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer"
-                      onClick={() => togglePasswordVisibility('confirm')}
-                    >
-                      {showPasswords.confirm ? (
-                        <EyeOff className="h-5 w-5 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-5 w-5 text-muted-foreground" />
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <Button type="submit" className="w-full">
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  {t('security.change_password')}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Language Tab */}
-        <TabsContent value="language" className="mt-6 animate-fade-in">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Globe className="h-5 w-5" />
-                {t('language.title')}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="language-select">{t('language.select')}</Label>
-                <Select value={language} onValueChange={(value) => setLanguage(value)}>
-                  <SelectTrigger className="w-[150px]">
-                    <SelectValue placeholder="Language" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en">English</SelectItem>
-                    <SelectItem value="fr">Français</SelectItem>
-                    <SelectItem value="ar">العربية</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* About Tab */}
-        <TabsContent value="about" className="mt-6 animate-fade-in">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Info className="h-5 w-5" />
-                {language === 'ar' ? 'حول التطبيق' : 'About Application'}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex flex-col md:flex-row md:space-x-6 space-y-4 md:space-y-0">
-                <div className="flex-1 space-y-4">
-                  <div className="space-y-2">
-                    <h3 className="font-semibold">
-                      {language === 'ar' ? 'معلومات النظام' : 'System Information'}
-                    </h3>
-                    <p className="text-sm text-muted-foreground">
-                      {language === 'ar'
-                        ? 'تتبع حالة النظام الأساسية للتطبيق.'
-                        : "Track the application's basic system status."}
-                    </p>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Database className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-muted-foreground">
-                        {language === 'ar' ? 'حالة الشبكة' : 'Network Status'}:{' '}
-                        <Badge
-                          variant={
-                            systemInfo.networkStatus === 'connected'
-                              ? 'default'
-                              : 'destructive'
-                          }
-                        >
-                          {systemInfo.networkStatus === 'connected'
-                            ? language === 'ar'
-                              ? 'متصل'
-                              : 'Connected'
-                            : language === 'ar'
-                            ? 'غير متصل'
-                            : 'Disconnected'}
-                        </Badge>
-                      </p>
-                    </div>
                   </div>
                   <div>
-                    <h3 className="font-semibold mb-2">
-                      {language === 'ar' ? 'تفاصيل الاتصال' : 'Contact Details'}
-                    </h3>
-                    <p className="text-muted-foreground">
-                      {language === 'ar' ? 'تم التطوير بواسطة' : 'Developed by'}: Youssef
-                      Abdouni
-                    </p>
-                    <p className="text-muted-foreground">
-                      {language === 'ar' ? 'الدعم' : 'Support'}: youssefabdouni44@gmail.com
+                    <Label className="text-sm font-semibold">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={settings.email}
+                      className="mt-2 border-blue-200 focus:border-blue-500"
+                      disabled
+                    />
+                  </div>
+                  <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                    <p className="text-xs text-gray-600 dark:text-gray-300">
+                      ℹ️ Ces informations sont gérées par votre administrateur
                     </p>
                   </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-200 dark:border-green-800">
+                <CardHeader className="bg-gradient-to-r from-green-500/10 to-emerald-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <Info className="h-5 w-5 text-green-600" />
+                    📊 Informations Système
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-6">
+                  <div>
+                    <p className="text-xs text-gray-600 dark:text-gray-300">Version</p>
+                    <Badge className="mt-2 bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300">
+                      v{systemInfo.version}
+                    </Badge>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 dark:text-gray-300">Dernière connexion</p>
+                    <p className="mt-2 font-semibold text-sm">{systemInfo.lastLogin}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-600 dark:text-gray-300">Langue actuelle</p>
+                    <Badge className="mt-2 bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                      {language === 'ar' ? '🇪🇭 العربية' : '🇫🇷 Français'}
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </TabsContent>
+
+          {/* Store Tab */}
+          <TabsContent value="magasin" className="space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card className="border-cyan-200 dark:border-cyan-800">
+                <CardHeader className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <Globe className="h-5 w-5" />
+                    🏪 Magasin Assigné
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6 pt-6">
+                  <div className="p-6 rounded-lg bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-800">
+                    <div className="flex items-start gap-4">
+                      <Lock className="h-6 w-6 text-cyan-600 flex-shrink-0 mt-1" />
+                      <div className="flex-1">
+                        <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                          🔒 {storeSettings.name}
+                        </h3>
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          Ceci est le seul magasin auquel vous avez accès. Tous les produits et transactions sont limités à ce magasin.
+                        </p>
+                        <div className="mt-4 flex items-center gap-2">
+                          <Badge className="bg-cyan-600">
+                            Magasin Verrouillé
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                    <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                      ⚠️ Vous ne pouvez pas changer de magasin assigné. Contactez votre administrateur si vous avez besoin de modifier cette assignation.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </TabsContent>
+
+          {/* Security Tab */}
+          <TabsContent value="securite" className="space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4"
+            >
+              <Card className="border-red-200 dark:border-red-800">
+                <CardHeader className="bg-gradient-to-r from-red-500/10 to-orange-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-5 w-5" />
+                    🔐 Mot de Passe
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-6">
+                  <div>
+                    <Label className="text-sm font-semibold">Mot de passe actuel</Label>
+                    <div className="relative mt-2">
+                      <Input
+                        id="currentPassword"
+                        type={showPasswords.current ? "text" : "password"}
+                        value={settings.currentPassword}
+                        onChange={(e) => handleInputChange('currentPassword', e.target.value)}
+                        className="pr-10 border-red-200 focus:border-red-500"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility('current')}
+                        className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
+                      >
+                        {showPasswords.current ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <Separator className="my-4" />
+
+                  <div>
+                    <Label className="text-sm font-semibold">Nouveau mot de passe</Label>
+                    <div className="relative mt-2">
+                      <Input
+                        id="newPassword"
+                        type={showPasswords.new ? "text" : "password"}
+                        value={settings.newPassword}
+                        onChange={(e) => handleInputChange('newPassword', e.target.value)}
+                        className="pr-10 border-red-200 focus:border-red-500"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility('new')}
+                        className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
+                      >
+                        {showPasswords.new ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <Label className="text-sm font-semibold">Confirmer le mot de passe</Label>
+                    <div className="relative mt-2">
+                      <Input
+                        id="confirmPassword"
+                        type={showPasswords.confirm ? "text" : "password"}
+                        value={settings.confirmPassword}
+                        onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                        className="pr-10 border-red-200 focus:border-red-500"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => togglePasswordVisibility('confirm')}
+                        className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
+                      >
+                        {showPasswords.confirm ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                    <Button className="w-full bg-gradient-to-r from-red-600 to-orange-600 hover:from-red-700 hover:to-orange-700 text-white font-bold">
+                      <Save className="h-4 w-4 mr-2" />
+                      Mettre à jour le mot de passe
+                    </Button>
+                  </motion.div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-purple-200 dark:border-purple-800">
+                <CardHeader className="bg-gradient-to-r from-purple-500/10 to-pink-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <LogOut className="h-5 w-5" />
+                    🚪 Déconnexion
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 pt-6">
+                  <p className="text-sm text-gray-600 dark:text-gray-300">
+                    Cliquez sur le bouton ci-dessous pour vous déconnecter de votre compte.
+                  </p>
+                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                    <Button
+                      onClick={handleLogout}
+                      className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold"
+                    >
+                      <LogOut className="h-4 w-4 mr-2" />
+                      Se déconnecter
+                    </Button>
+                  </motion.div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </TabsContent>
+
+          {/* Preferences Tab */}
+          <TabsContent value="preferences" className="space-y-6">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
+              <Card className="border-indigo-200 dark:border-indigo-800">
+                <CardHeader className="bg-gradient-to-r from-indigo-500/10 to-blue-500/10">
+                  <CardTitle className="flex items-center gap-2">
+                    <Globe className="h-5 w-5" />
+                    🌐 Langue et Localisation
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6 pt-6">
+                  <div>
+                    <Label className="text-sm font-semibold mb-3 block">Sélectionnez votre langue</Label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { value: 'fr', label: '🇫🇷 Français', emoji: 'FR' },
+                        { value: 'ar', label: '🇪🇭 العربية', emoji: 'AR' }
+                      ].map((lang) => (
+                        <motion.button
+                          key={lang.value}
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          onClick={() => handleLanguageChange(lang.value)}
+                          className={`p-4 rounded-lg border-2 transition-all ${
+                            language === lang.value
+                              ? 'bg-gradient-to-r from-indigo-500 to-blue-500 text-white border-indigo-600'
+                              : 'bg-white dark:bg-slate-800 text-gray-900 dark:text-white border-gray-200 dark:border-gray-700 hover:border-indigo-300'
+                          }`}
+                        >
+                          <p className="font-bold text-lg">{lang.label}</p>
+                          {language === lang.value && <Check className="h-5 w-5 mt-2" />}
+                        </motion.button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <Label className="text-sm font-semibold">Options d'Affichage</Label>
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
+                      <div className="flex items-center gap-3">
+                        <Bell className="h-5 w-5 text-blue-600" />
+                        <span className="font-medium">Notifications</span>
+                      </div>
+                      <Switch
+                        checked={settings.notifications}
+                        onCheckedChange={(checked) => handleInputChange('notifications', checked)}
+                      />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </TabsContent>
+        </Tabs>
+      </motion.div>
+
+      {/* Footer Info */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="rounded-2xl backdrop-blur-xl border border-yellow-200 dark:border-yellow-800 p-6 shadow-lg bg-gradient-to-r from-yellow-50 dark:from-yellow-900/20 to-orange-50 dark:to-orange-900/20"
+      >
+        <p className="text-sm text-yellow-700 dark:text-yellow-300 flex items-start gap-2">
+          <Info className="h-5 w-5 flex-shrink-0 mt-0.5" />
+          <span>
+            Pour toute assistance ou question concernant vos paramètres, veuillez contacter votre administrateur système.
+          </span>
+        </p>
+      </motion.div>
     </div>
   );
 }
 
-export default WorkerSettings;
+// Import Check icon
+import { Check } from 'lucide-react';

@@ -23,8 +23,10 @@ import NotFound from "./pages/NotFound";
 import { CommandPalette, useCommandPalette } from "./components/CommandPalette";
 import WorkerSettings from "@/workers/WorkerSettings";
 
-// ✅ import worker layout + worker dashboard
+// ✅ import worker layout + worker dashboard + worker POS + worker sales
 import WorkerDashboard from "@/workers/WorkerDashboard";
+import WorkerPOS from "@/workers/WorkerPOS";
+import WorkerSales from "@/workers/WorkerSales";
 import { WorkerLayout } from "@/workers/WorkerLayout";
 
 const queryClient = new QueryClient();
@@ -112,8 +114,8 @@ const AppContent = () => {
           }
         >
           <Route index element={<WorkerDashboard />} />
-          <Route path="pos" element={<POS />} />
-          <Route path="sales" element={<Sales />} />
+          <Route path="pos" element={<WorkerPOS />} />
+          <Route path="sales" element={<WorkerSales />} />
           <Route path="workersettings" element={<WorkerSettings />} />
         </Route>
 

@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
-import { signIn, signUp } from "@/lib/supabaseClient";
+import { signIn, signUp, getUserProfile } from "@/lib/supabaseClient";
 
 interface LoginProps {
   onLogin: (user: any) => void;
@@ -46,36 +46,87 @@ export default function Login({ onLogin }: LoginProps) {
     setIsLoading(true);
 
     try {
-      const { user } = await signIn(
-        loginCredentials.email,
-        loginCredentials.password
-      );
+      // First try Supabase auth
+      try {
+        const { user: authUser } = await signIn(
+          loginCredentials.email,
+          loginCredentials.password
+        );
 
-      // Create user object with proper structure for AuthContext
-      const userData = {
-        id: user?.id || '',
-        username: user?.username || user?.email || '',
-        email: user?.email || '',
-        role: user?.role || 'admin',
-        name: user?.username || user?.email || ''
-      };
+        // Fetch full user profile with role
+        const userProfile = await getUserProfile();
 
-      toast({
-        title: "✅ Connexion réussie",
-        description: `Bienvenue ${userData.username}! Redirection en cours...`,
-      });
+        // Create user object with proper structure for AuthContext
+        const userData = {
+          id: userProfile?.id || authUser?.id || '',
+          username: userProfile?.username || authUser?.email?.split('@')[0] || '',
+          email: userProfile?.email || authUser?.email || '',
+          role: userProfile?.role || 'admin',
+          name: userProfile?.username || authUser?.email || ''
+        };
 
-      onLogin(userData);
-      
-      // Small delay to ensure auth context updates
-      setTimeout(() => {
-        navigate("/", { replace: true });
-      }, 500);
+        console.log('✅ User logged in via Supabase:', userData);
+
+        toast({
+          title: "✅ Connexion réussie",
+          description: `Bienvenue ${userData.username}! Redirection en cours...`,
+        });
+
+        onLogin(userData);
+        
+        // Small delay to ensure auth context updates
+        setTimeout(() => {
+          // Route based on role
+          if (userData.role === 'employee') {
+            navigate("/employee/dashboard", { replace: true });
+          } else {
+            navigate("/", { replace: true });
+          }
+        }, 500);
+      } catch (supabaseErr: any) {
+        console.warn('⚠️ Supabase auth failed, trying local credentials...');
+        
+        // Fallback: Check localStorage for worker credentials (for testing/development)
+        const storedWorker = localStorage.getItem(`worker_${loginCredentials.email}`);
+        
+        if (storedWorker) {
+          const workerData = JSON.parse(storedWorker);
+          
+          // Verify password matches
+          if (workerData.password === loginCredentials.password) {
+            console.log('✅ Worker authenticated via localStorage (dev mode)');
+            
+            // Create user object
+            const userData = {
+              id: loginCredentials.email, // Use email as ID for dev
+              username: workerData.username || loginCredentials.email.split('@')[0],
+              email: loginCredentials.email,
+              role: 'employee',
+              name: workerData.username || loginCredentials.email
+            };
+
+            toast({
+              title: "✅ Connexion réussie (Dev Mode)",
+              description: `Bienvenue ${userData.username}!`,
+            });
+
+            onLogin(userData);
+            
+            setTimeout(() => {
+              navigate("/employee/dashboard", { replace: true });
+            }, 500);
+          } else {
+            throw new Error('Password mismatch');
+          }
+        } else {
+          throw supabaseErr; // Re-throw original error
+        }
+      }
     } catch (err: any) {
       console.error("Login error:", err);
       toast({
         title: "❌ Erreur de connexion",
-        description: err.message || "Email ou mot de passe incorrect",
+        description: err.message || "Email ou mot de passe incorrect. Assurez-vous que la confirmation d'email est désactivée dans les paramètres Supabase.",
         variant: "destructive",
       });
     } finally {

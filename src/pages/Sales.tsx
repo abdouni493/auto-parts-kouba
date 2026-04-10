@@ -52,7 +52,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { Label } from '@/components/ui/label';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { supabase, getInvoices } from '@/lib/supabaseClient';
+import { supabase, getInvoices, getEmployeeNameById } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface Invoice {
@@ -645,15 +645,23 @@ export default function Sales() {
     try {
       const invoicesData = await getInvoices('sale');
       
-      const normalized: Invoice[] = (invoicesData || []).map((inv: any) => ({
-        id: inv.id,
-        clientId: inv.client_name ?? null,
-        clientName: inv.client_name ?? null,
-        total: inv.total_amount || inv.total || 0,
-        amount_paid: inv.amount_paid || 0,
-        created_at: inv.invoice_date || inv.created_at,
-        createdByType: inv.created_by_type || 'admin',
-        createdBy: inv.created_by || 'Admin',
+      const normalized: Invoice[] = await Promise.all((invoicesData || []).map(async (inv: any) => {
+        // Get the creator's full name if created_by is a UUID
+        let createdByName = inv.created_by || 'Admin';
+        if (inv.created_by && inv.created_by.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+          createdByName = await getEmployeeNameById(inv.created_by);
+        }
+
+        return {
+          id: inv.id,
+          clientId: inv.client_name ?? null,
+          clientName: inv.client_name ?? null,
+          total: inv.total_amount || inv.total || 0,
+          amount_paid: inv.amount_paid || 0,
+          created_at: inv.invoice_date || inv.created_at,
+          createdByType: inv.created_by_type || 'admin',
+          createdBy: createdByName,
+        };
       }));
 
       setSalesInvoices(normalized);
@@ -1058,17 +1066,17 @@ export default function Sales() {
           {/* Invoices Table */}
           <div className="rounded-md border">
             <Table>
-              <TableHeader>
+              <TableHeader className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20">
                 <TableRow>
-                  <TableHead>{language === 'ar' ? 'رقم الفاتورة' : 'Numéro'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'العميل' : 'Client'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'التاريخ' : 'Date'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'المبلغ الإجمالي' : 'Montant Total'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'المبلغ المدفوع' : 'Montant Payé'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'المبلغ المتبقي' : 'Reste à Payer'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'الحالة' : 'Statut'}</TableHead>
-                  <TableHead>{language === 'ar' ? 'أنشأ بواسطة' : 'Créé par'}</TableHead>
-                  <TableHead className="text-center">{language === 'ar' ? 'الإجراءات' : 'Actions'}</TableHead>
+                  <TableHead className="font-bold">📋 {language === 'ar' ? 'رقم الفاتورة' : 'Numéro'}</TableHead>
+                  <TableHead className="font-bold">👤 {language === 'ar' ? 'العميل' : 'Client'}</TableHead>
+                  <TableHead className="font-bold">📅 {language === 'ar' ? 'التاريخ' : 'Date'}</TableHead>
+                  <TableHead className="font-bold">💰 {language === 'ar' ? 'المبلغ الإجمالي' : 'Montant Total'}</TableHead>
+                  <TableHead className="font-bold">✅ {language === 'ar' ? 'المبلغ المدفوع' : 'Montant Payé'}</TableHead>
+                  <TableHead className="font-bold">⏳ {language === 'ar' ? 'المبلغ المتبقي' : 'Reste à Payer'}</TableHead>
+                  <TableHead className="font-bold">🏷️ {language === 'ar' ? 'الحالة' : 'Statut'}</TableHead>
+                  <TableHead className="font-bold">👨‍💼 {language === 'ar' ? 'أنشأ بواسطة' : 'Créé par'}</TableHead>
+                  <TableHead className="text-center font-bold">⚙️ {language === 'ar' ? 'الإجراءات' : 'Actions'}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1084,35 +1092,32 @@ export default function Sales() {
                     const isPaid = remainingDebt <= 0;
                     
                     return (
-                      <TableRow key={invoice.id}>
-                        <TableCell className="font-medium">#{invoice.id}</TableCell>
-                        <TableCell>
-                          {invoice.clientName || (language === 'ar' ? 'العميل عابر' : 'Client de passage')}
+                      <TableRow key={invoice.id} className="hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-colors">
+                        <TableCell className="font-bold text-blue-600">#{invoice.id}</TableCell>
+                        <TableCell className="font-medium">
+                          👤 {invoice.clientName || (language === 'ar' ? 'العميل عابر' : 'Client de passage')}
                         </TableCell>
-                        <TableCell>{formatDate(invoice.created_at, language)}</TableCell>
-                        <TableCell>{formatCurrencyLocal(invoice.total, language)}</TableCell>
-                        <TableCell>{formatCurrencyLocal(invoice.amount_paid, language)}</TableCell>
+                        <TableCell className="text-gray-600">📅 {formatDate(invoice.created_at, language)}</TableCell>
+                        <TableCell className="font-bold text-blue-700">
+                          💵 {formatCurrencyLocal(invoice.total, language)}
+                        </TableCell>
+                        <TableCell className="font-bold text-green-600">
+                          ✅ {formatCurrencyLocal(invoice.amount_paid, language)}
+                        </TableCell>
                         <TableCell>
-                          <span className={remainingDebt > 0 ? 'text-red-600 font-medium' : 'text-green-600 font-medium'}>
-                            {formatCurrencyLocal(remainingDebt, language)}
+                          <span className={`font-bold ${remainingDebt > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            {remainingDebt > 0 ? '⏳' : '✨'} {formatCurrencyLocal(remainingDebt, language)}
                           </span>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isPaid ? 'default' : 'destructive'}>
+                          <Badge variant={isPaid ? 'default' : 'destructive'} className="whitespace-nowrap">
                             {isPaid 
-                              ? (language === 'ar' ? 'مدفوعة' : 'Payée') 
-                              : (language === 'ar' ? 'دين' : 'Dette')}
+                              ? '✅ ' + (language === 'ar' ? 'مدفوعة' : 'Payée') 
+                              : '❌ ' + (language === 'ar' ? 'دين' : 'Dette')}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
-                            {invoice.createdByType === 'admin' ? (
-                              <Crown className="h-4 w-4 text-yellow-600" />
-                            ) : (
-                              <User className="h-4 w-4 text-blue-600" />
-                            )}
-                            <span>{invoice.createdBy}</span>
-                          </div>
+                          <span className="font-medium">{invoice.createdBy}</span>
                         </TableCell>
                         <TableCell>
                           <div className="flex justify-center gap-2">
@@ -1122,9 +1127,10 @@ export default function Sales() {
                                 variant="default"
                                 size="sm"
                                 onClick={() => handleQuickPayInFull(invoice.id)}
-                                className="bg-green-600 hover:bg-green-700 text-white"
+                                className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-medium"
+                                title={language === 'ar' ? 'دفع الكامل' : 'Payer en intégralité'}
                               >
-                                <Check className="h-4 w-4" />
+                                ✅ {language === 'ar' ? 'دفع' : 'Payer'}
                               </Button>
                             )}
                             
@@ -1132,23 +1138,29 @@ export default function Sales() {
                               variant="outline"
                               size="sm"
                               onClick={() => handlePrintInvoice(invoice.id)}
+                              className="hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                              title={language === 'ar' ? 'طباعة' : 'Imprimer'}
                             >
-                              <Printer className="h-4 w-4" />
+                              🖨️
                             </Button>
                             <Button
                               variant="outline"
                               size="sm"
                               onClick={() => handleOpenEditModal(invoice)}
+                              className="hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                              title={language === 'ar' ? 'عرض' : 'Voir'}
                             >
-                              <Eye className="h-4 w-4" />
+                              👁️
                             </Button>
                             {!isEmployee && (
                               <Button
                                 variant="destructive"
                                 size="sm"
                                 onClick={() => openDeleteConfirmation(invoice.id)}
+                                className="hover:bg-red-700"
+                                title={language === 'ar' ? 'حذف' : 'Supprimer'}
                               >
-                                <Trash2 className="h-4 w-4" />
+                                🗑️
                               </Button>
                             )}
                           </div>

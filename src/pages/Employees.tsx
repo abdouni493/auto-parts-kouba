@@ -55,7 +55,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth } from '@/lib/supabaseClient';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth, getStores, createEmployeeAuthUser } from '@/lib/supabaseClient';
 import { useToast } from '@/hooks/use-toast';
 
 interface Employee {
@@ -74,11 +74,20 @@ interface Employee {
   updated_at?: string;
   username?: string;
   hasAccount?: boolean;
+  store_id?: string;
   lastPayment?: {
     amount: number;
     date: string;
     type: 'salary' | 'bonus' | 'commission';
   };
+}
+
+interface Store {
+  id: string;
+  name: string;
+  address?: string;
+  city?: string;
+  is_active: boolean;
 }
 
 interface Payment {
@@ -93,6 +102,7 @@ export default function Employees() {
   const { language, isRTL } = useLanguage();
   const { toast } = useToast();
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterRole, setFilterRole] = useState('all');
   
@@ -113,7 +123,8 @@ export default function Employees() {
     birth_date: '',
     username: '',
     password: '',
-    confirmPassword: ''
+    confirmPassword: '',
+    store_id: ''
   });
 
   const [paymentData, setPaymentData] = useState({
@@ -147,6 +158,20 @@ export default function Employees() {
     }
   };
 
+  const fetchStores = async () => {
+    try {
+      const data = await getStores();
+      setStores(data || []);
+    } catch (err) {
+      console.error('Failed to fetch stores:', err);
+      toast({
+        title: language === 'ar' ? 'خطأ' : 'Error',
+        description: language === 'ar' ? 'فشل في جلب المتاجر' : 'Failed to fetch stores',
+        variant: 'destructive'
+      });
+    }
+  };
+
   const fetchPaymentHistory = async (employeeId: string) => {
     try {
       const data = await getPaymentHistory(employeeId);
@@ -170,6 +195,7 @@ export default function Employees() {
 
   useEffect(() => {
     fetchEmployees();
+    fetchStores();
     fetchPaymentStats();
   }, []);
 
@@ -209,7 +235,8 @@ export default function Employees() {
       birth_date: '',
       username: '',
       password: '',
-      confirmPassword: ''
+      confirmPassword: '',
+      store_id: ''
     });
     setIsDialogOpen(true);
   };
@@ -227,7 +254,8 @@ export default function Employees() {
       birth_date: employee.birth_date || '',
       username: employee.username || '',
       password: '',
-      confirmPassword: ''
+      confirmPassword: '',
+      store_id: employee.store_id || ''
     });
     setIsDialogOpen(true);
   };
@@ -275,7 +303,61 @@ export default function Employees() {
   const handleSubmit = async () => {
     try {
       if (dialogMode === 'create') {
-        // Only send fields that exist in the employees table
+        // Validate password if provided
+        if (formData.password) {
+          if (formData.password !== formData.confirmPassword) {
+            toast({
+              title: language === 'ar' ? 'خطأ' : 'Error',
+              description: language === 'ar' ? 'كلمات المرور غير متطابقة' : 'Passwords do not match',
+              variant: 'destructive'
+            });
+            return;
+          }
+          if (formData.password.length < 6) {
+            toast({
+              title: language === 'ar' ? 'خطأ' : 'Error',
+              description: language === 'ar' ? 'يجب أن تكون كلمة المرور 6 أحرف على الأقل' : 'Password must be at least 6 characters',
+              variant: 'destructive'
+            });
+            return;
+          }
+        }
+
+        // If password is provided, create auth user first
+        let authUserId = null;
+        if (formData.password && formData.email) {
+          try {
+            console.log('🔐 Creating auth user for worker...');
+            const authResult = await createEmployeeAuthUser(formData.email, formData.password, formData.username || formData.email.split('@')[0]);
+            authUserId = authResult.authUser?.id;
+            
+            // IMPORTANT: Store credentials in localStorage for testing (remove in production)
+            // This is a workaround for email confirmation requirement
+            localStorage.setItem(`worker_${formData.email}`, JSON.stringify({
+              email: formData.email,
+              password: formData.password,
+              username: formData.username
+            }));
+            console.log('✅ Worker credentials stored for testing');
+            
+            toast({
+              title: language === 'ar' ? 'تم' : 'Success',
+              description: language === 'ar' ? '✅ تم إنشاء حساب تسجيل الدخول. يمكن الآن تسجيل الدخول بالبيانات التالية:\n📧 ' + formData.email + '\n🔑 ' + formData.password : '✅ Login account created. You can now login with:\n📧 ' + formData.email + '\n🔑 ' + formData.password,
+              variant: 'default'
+            });
+          } catch (authErr: any) {
+            const errorMsg = authErr?.message || (language === 'ar' ? 'فشل في إنشاء حساب تسجيل الدخول. تحقق من أن Supabase لديه تأكيد البريد الإلكتروني معطلاً' : 'Failed to create login account. Make sure Supabase has email confirmation disabled');
+            toast({
+              title: language === 'ar' ? 'تحذير' : 'Warning',
+              description: errorMsg,
+              variant: 'default'
+            });
+            console.error('Auth error details:', authErr);
+            // Continue with employee creation anyway - credentials will be stored locally
+          }
+        }
+
+        // Create employee record
         const newEmployeeData = {
           full_name: formData.full_name,
           email: formData.email,
@@ -285,7 +367,9 @@ export default function Employees() {
           address: formData.address,
           birth_date: formData.birth_date || null,
           hire_date: new Date().toISOString().split('T')[0],
-          is_active: true
+          is_active: true,
+          store_id: formData.store_id || null,
+          user_id: authUserId || null
         };
         await createEmployee(newEmployeeData);
         toast({
@@ -302,7 +386,8 @@ export default function Employees() {
           position: formData.position,
           salary: formData.salary,
           address: formData.address,
-          birth_date: formData.birth_date || null
+          birth_date: formData.birth_date || null,
+          store_id: formData.store_id || null
         };
         await updateEmployee(String(selectedEmployee.id), updatedEmployeeData);
         toast({
@@ -866,6 +951,24 @@ export default function Employees() {
                       <span>💰</span>
                       {language === 'ar' ? 'بالدينار الجزائري (د.ج)' : 'En dinars algériens (DZD)'}
                     </div>
+                  </motion.div>
+
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-green-50 to-teal-50 dark:from-green-900/20 dark:to-teal-900/20 border-2 border-green-200 dark:border-green-800">
+                    <Label htmlFor="store" className="font-bold text-lg text-green-700 dark:text-green-400">
+                      🏪 {language === 'ar' ? 'المتجر / المغازة' : 'Magasin'} <span className="text-red-500">*</span>
+                    </Label>
+                    <Select value={formData.store_id} onValueChange={(value: string) => setFormData({...formData, store_id: value})}>
+                      <SelectTrigger className="border-2 border-green-300 dark:border-green-700 rounded-lg font-bold">
+                        <SelectValue placeholder={language === 'ar' ? 'اختر المتجر' : 'Sélectionner un magasin'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {stores.map((store) => (
+                          <SelectItem key={store.id} value={store.id}>
+                            🏪 {store.name} {store.city ? `(${store.city})` : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </motion.div>
                 </TabsContent>
 

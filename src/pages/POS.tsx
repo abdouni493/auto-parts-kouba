@@ -54,7 +54,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { supabase, getProducts, getStores } from '@/lib/supabaseClient';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase, getProducts, getStores, getEmployeeNameById } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface Product {
@@ -127,6 +128,7 @@ const formatCurrencyLocal = (amount: number, language: string) =>
 export default function POS() {
   const { toast } = useToast();
   const { language, isRTL } = useLanguage();
+  const { user } = useAuth();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -152,6 +154,7 @@ export default function POS() {
     if (typeof window === 'undefined') return false;
     return localStorage.getItem('posStorePinned') === 'true';
   });
+  const [recentInvoices, setRecentInvoices] = useState<any[]>([]);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -210,9 +213,43 @@ export default function POS() {
     }
   };
 
+  // --- Fetch Recent Invoices ---
+  const fetchRecentInvoices = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('type', 'sale')
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+
+      // Fetch creator names for each invoice
+      const invoicesWithNames = await Promise.all((data || []).map(async (inv: any) => {
+        let creatorName = inv.created_by || 'Admin';
+        if (inv.created_by && inv.created_by.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+          creatorName = await getEmployeeNameById(inv.created_by);
+        }
+        return {
+          ...inv,
+          creatorName
+        };
+      }));
+
+      setRecentInvoices(invoicesWithNames);
+    } catch (error) {
+      console.error('Error fetching recent invoices:', error);
+    }
+  };
+
   useEffect(() => {
     fetchStores();
     fetchProducts();
+    fetchRecentInvoices();
+    // Refresh recent invoices every 30 seconds
+    const interval = setInterval(fetchRecentInvoices, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Persist selected store when pin is enabled
@@ -532,9 +569,22 @@ export default function POS() {
             <Label className="flex items-center gap-2 mb-3 font-bold text-lg text-slate-700 dark:text-slate-300">
               <Store className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               {language === 'ar' ? 'اختر المتجر' : 'Sélectionner le magasin'}
+              {user?.role === 'employee' && (
+                <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full ml-2">
+                  {language === 'ar' ? '🔒 مقفل' : '🔒 Verrouillé'}
+                </span>
+              )}
             </Label>
-            <Select value={selectedStore} onValueChange={setSelectedStore}>
-              <SelectTrigger className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-slate-700 dark:to-slate-600 border-2 border-blue-300 dark:border-blue-600 hover:border-blue-500 rounded-xl h-12 text-base font-semibold">
+            <Select 
+              value={selectedStore} 
+              onValueChange={user?.role === 'employee' ? undefined : setSelectedStore}
+              disabled={user?.role === 'employee'}
+            >
+              <SelectTrigger className={`${
+                user?.role === 'employee' 
+                  ? 'bg-amber-50 dark:bg-amber-900/20 border-2 border-amber-400 dark:border-amber-600 opacity-70 cursor-not-allowed' 
+                  : 'bg-gradient-to-r from-blue-50 to-purple-50 dark:from-slate-700 dark:to-slate-600 border-2 border-blue-300 dark:border-blue-600 hover:border-blue-500'
+              } rounded-xl h-12 text-base font-semibold`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-xl">
@@ -546,18 +596,28 @@ export default function POS() {
               </SelectContent>
             </Select>
 
-            <div className="mt-3 flex items-center gap-2">
-              <input
-                id="pin-store"
-                type="checkbox"
-                checked={isStorePinned}
-                onChange={(e) => setIsStorePinned(e.target.checked)}
-                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-              />
-              <label htmlFor="pin-store" className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                {language === 'ar' ? 'تثبيت اختيار المتجر' : 'Épingler le magasin'}
-              </label>
-            </div>
+            {user?.role !== 'employee' && (
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  id="pin-store"
+                  type="checkbox"
+                  checked={isStorePinned}
+                  onChange={(e) => setIsStorePinned(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="pin-store" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {language === 'ar' ? 'تثبيت اختيار المتجر' : 'Épingler le magasin'}
+                </label>
+              </div>
+            )}
+
+            {user?.role === 'employee' && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 italic">
+                {language === 'ar' 
+                  ? '⚠️ لا يمكنك تغيير المتجر. يتم تحديده من قبل الإدارة.' 
+                  : '⚠️ Vous ne pouvez pas changer de magasin. Il est défini par l\'administration.'}
+              </p>
+            )}
           </motion.div>
         </motion.div>
 
@@ -645,7 +705,9 @@ export default function POS() {
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📝 {language === 'ar' ? 'الوصف' : 'Description'}</th>
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">💰 {language === 'ar' ? 'البيع' : 'Vente'}</th>
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📊 {language === 'ar' ? 'الحالي' : 'Actuel'}</th>
-                            <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
+                            {user?.role !== 'employee' && (
+                              <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⏱️ {language === 'ar' ? 'آخر سعر البيع' : 'Dernier Prix Vente'}</th>
+                            )}
                             <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⚙️</th>
                           </tr>
                         </thead>
@@ -692,9 +754,11 @@ export default function POS() {
                                       {product.current_quantity}
                                     </Badge>
                                   </td>
-                                  <td className="px-4 py-3 text-center text-sm font-semibold text-purple-700 dark:text-purple-400">
-                                    {formatCurrencyLocal(product.last_price_to_sell || product.selling_price, language)}
-                                  </td>
+                                  {user?.role !== 'employee' && (
+                                    <td className="px-4 py-3 text-center text-sm font-semibold text-purple-700 dark:text-purple-400">
+                                      {formatCurrencyLocal(product.last_price_to_sell || product.selling_price, language)}
+                                    </td>
+                                  )}
                                   <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                                     <DropdownMenu>
                                       <DropdownMenuTrigger asChild>
@@ -1020,6 +1084,64 @@ export default function POS() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Recent Invoices Section */}
+      {recentInvoices.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-8"
+        >
+          <Card className="border-2 border-gradient-to-r from-blue-200 to-purple-200 dark:border-blue-700 shadow-lg">
+            <CardHeader className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                📋 {language === 'ar' ? 'آخر الفواتير' : 'Dernières Factures'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/10 dark:to-purple-900/10">
+                    <TableRow>
+                      <TableHead className="font-bold">📋 {language === 'ar' ? 'الرقم' : 'N°'}</TableHead>
+                      <TableHead className="font-bold">👤 {language === 'ar' ? 'العميل' : 'Client'}</TableHead>
+                      <TableHead className="font-bold">👨‍💼 {language === 'ar' ? 'أنشأ بواسطة' : 'Créé par'}</TableHead>
+                      <TableHead className="font-bold">💰 {language === 'ar' ? 'المبلغ' : 'Montant'}</TableHead>
+                      <TableHead className="font-bold">✅ {language === 'ar' ? 'المدفوع' : 'Payé'}</TableHead>
+                      <TableHead className="font-bold">🕐 {language === 'ar' ? 'الوقت' : 'Heure'}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recentInvoices.map((invoice) => (
+                      <TableRow key={invoice.id} className="hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-colors">
+                        <TableCell className="font-bold text-blue-600">#{invoice.id}</TableCell>
+                        <TableCell className="font-medium">👤 {invoice.client_name || (language === 'ar' ? 'عابر' : 'Anonyme')}</TableCell>
+                        <TableCell>
+                          <span className="font-medium">{invoice.creatorName}</span>
+                        </TableCell>
+                        <TableCell className="font-bold text-blue-700">💵 {new Intl.NumberFormat(language === 'ar' ? 'ar-DZ' : 'fr-DZ', {
+                          style: 'currency',
+                          currency: 'DZD'
+                        }).format(invoice.total_amount || 0)}</TableCell>
+                        <TableCell className="font-bold text-green-600">✅ {new Intl.NumberFormat(language === 'ar' ? 'ar-DZ' : 'fr-DZ', {
+                          style: 'currency',
+                          currency: 'DZD'
+                        }).format(invoice.amount_paid || 0)}</TableCell>
+                        <TableCell className="text-sm text-gray-600 dark:text-gray-400">
+                          🕐 {new Date(invoice.created_at).toLocaleTimeString(language === 'ar' ? 'ar-DZ' : 'fr-DZ', { 
+                            hour: '2-digit', 
+                            minute: '2-digit' 
+                          })}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
     </div>
   );
 }

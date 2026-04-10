@@ -86,6 +86,83 @@ export const getCurrentUser = async () => {
   }
 };
 
+// ========== CREATE AUTH USER FOR EMPLOYEES ==========
+// NOTE: This requires proper error handling and may need backend function
+// For now, we store the credentials and let workers complete signup process
+
+export const createEmployeeAuthUser = async (email: string, password: string, username: string) => {
+  try {
+    console.log('🔐 Creating Supabase auth account for worker:', email);
+    
+    // Step 1: Create auth user
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username: username,
+          role: 'employee',
+          is_employee: true
+        },
+        emailRedirectTo: `${window.location.origin}/login`
+      }
+    });
+
+    if (authError) {
+      console.error('❌ Supabase auth error:', {
+        message: authError.message,
+        status: authError.status,
+        code: (authError as any).code
+      });
+      throw authError;
+    }
+
+    const userId = authData.user?.id;
+    console.log('✅ Auth account created:', userId);
+
+    // Wait a moment for the auth account to be fully created
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Step 2: Create user profile in users table
+    try {
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .upsert(
+          [
+            {
+              id: userId,
+              email,
+              username,
+              role: 'employee',
+              created_at: new Date().toISOString(),
+            },
+          ],
+          { onConflict: 'id' }
+        )
+        .select()
+        .single();
+
+      if (userError) {
+        console.error('⚠️ User profile creation warning:', userError.message);
+        // Don't throw - user auth succeeded
+      } else {
+        console.log('✅ User profile saved to database');
+      }
+    } catch (profileErr) {
+      console.warn('⚠️ Could not save user profile, but auth account exists');
+    }
+
+    return { 
+      user: { id: userId, email, username },
+      authUser: authData.user,
+      message: '✅ Auth account created - ready to login'
+    };
+  } catch (error: any) {
+    console.error('❌ Failed to create employee auth user:', error);
+    throw error;
+  }
+};
+
 // ========== PRODUCTS ==========
 
 export const getProducts = async () => {
@@ -559,46 +636,83 @@ export const getUserProfile = async () => {
     const { data: authUser } = await supabase.auth.getUser();
     if (!authUser.user) return null;
 
-    // First try to get existing profile
-    const { data, error } = await supabase
+    // First try to get existing profile from users table
+    const { data: userProfile, error: profileError } = await supabase
       .from('users')
       .select('*')
       .eq('id', authUser.user.id)
       .single();
 
-    if (error && error.code === 'PGRST116') {
-      // User profile doesn't exist, create one
-      console.log('User profile not found, creating new profile...');
-      const { data: newProfile, error: createError } = await supabase
-        .from('users')
-        .insert([
-          {
+    if (profileError && profileError.code === 'PGRST116') {
+      // User profile doesn't exist in users table
+      // Check if user is an employee
+      const { data: employeeData, error: employeeError } = await supabase
+        .from('employees')
+        .select('id, full_name, email')
+        .eq('email', authUser.user.email)
+        .single();
+
+      if (!employeeError && employeeData) {
+        // User is an employee/worker
+        console.log('Creating employee profile...');
+        const { data: newProfile, error: createError } = await supabase
+          .from('users')
+          .insert([
+            {
+              id: authUser.user.id,
+              email: authUser.user.email,
+              username: authUser.user.email?.split('@')[0] || 'employee',
+              role: 'employee',
+              created_at: new Date().toISOString(),
+            },
+          ])
+          .select()
+          .single();
+
+        if (createError) {
+          console.error('Failed to create employee profile:', createError);
+          return {
+            id: authUser.user.id,
+            email: authUser.user.email,
+            username: authUser.user.email?.split('@')[0] || 'employee',
+            role: 'employee'
+          };
+        }
+
+        return newProfile;
+      } else {
+        // No employee record found, create admin profile
+        console.log('Creating admin profile...');
+        const { data: newProfile, error: createError } = await supabase
+          .from('users')
+          .insert([
+            {
+              id: authUser.user.id,
+              email: authUser.user.email,
+              username: authUser.user.email?.split('@')[0] || 'user',
+              role: 'admin',
+              created_at: new Date().toISOString(),
+            },
+          ])
+          .select()
+          .single();
+
+        if (createError) {
+          console.error('Failed to create admin profile:', createError);
+          return {
             id: authUser.user.id,
             email: authUser.user.email,
             username: authUser.user.email?.split('@')[0] || 'user',
-            role: 'admin',
-            created_at: new Date().toISOString(),
-          },
-        ])
-        .select()
-        .single();
+            role: 'admin'
+          };
+        }
 
-      if (createError) {
-        console.error('Failed to create user profile:', createError);
-        // Return basic auth user info as fallback
-        return {
-          id: authUser.user.id,
-          email: authUser.user.email,
-          username: authUser.user.email?.split('@')[0] || 'user',
-          role: 'admin'
-        };
+        return newProfile;
       }
-
-      return newProfile;
     }
 
-    if (error) throw error;
-    return data;
+    if (profileError) throw profileError;
+    return userProfile;
   } catch (error) {
     console.error('Get user profile error:', error);
     // Return basic auth user info as fallback
@@ -609,6 +723,81 @@ export const getUserProfile = async () => {
       username: authUser.user.email?.split('@')[0] || 'user',
       role: 'admin'
     } : null;
+  }
+};
+
+export const getEmployeeByEmail = async (email: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('employees')
+      .select('*')
+      .eq('email', email)
+      .single();
+
+    if (error) {
+      // Check if it's a JWT error
+      if (error.message?.includes('JWT') || error.message?.includes('expired')) {
+        console.log('JWT expired in getEmployeeByEmail, returning null');
+        return null;
+      }
+      if (error.code === 'PGRST116') return null; // Not found
+      throw error;
+    }
+    return data;
+  } catch (err) {
+    const error = err as any;
+    if (error.message?.includes('JWT') || error.message?.includes('expired')) {
+      console.log('JWT error caught in getEmployeeByEmail');
+      return null;
+    }
+    throw error;
+  }
+};
+
+// Cache for employee names to reduce database queries
+const employeeNameCache: { [key: string]: string } = {};
+
+export const getEmployeeNameById = async (userId: string): Promise<string> => {
+  try {
+    // Check cache first
+    if (employeeNameCache[userId]) {
+      return employeeNameCache[userId];
+    }
+
+    const { data, error } = await supabase
+      .from('employees')
+      .select('full_name, email')
+      .eq('user_id', userId)  // Search by user_id, not id
+      .single();
+
+    if (error) {
+      // Check if it's a JWT error
+      if (error.message?.includes('JWT') || error.message?.includes('expired')) {
+        console.log('JWT expired in getEmployeeNameById');
+        return 'Unknown';
+      }
+      if (error.code === 'PGRST116') {
+        console.log('Employee not found for user_id:', userId);
+        return 'Unknown'; // Not found
+      }
+      console.error('Error fetching employee name:', error);
+      return 'Unknown';
+    }
+
+    // Use full_name if available, otherwise use email
+    const fullName = data?.full_name || data?.email || 'Unknown';
+
+    // Cache the result
+    employeeNameCache[userId] = fullName;
+    return fullName;
+  } catch (err) {
+    const error = err as any;
+    if (error.message?.includes('JWT') || error.message?.includes('expired')) {
+      console.log('JWT error caught in getEmployeeNameById');
+      return 'Unknown';
+    }
+    console.error('Error in getEmployeeNameById:', err);
+    return 'Unknown';
   }
 };
 
@@ -693,5 +882,31 @@ export const getSystemInfo = async () => {
       uptime: 'N/A',
       networkStatus: 'disconnected'
     };
+  }
+};
+
+// Utility function to ensure JWT is valid before making requests
+export const ensureValidSession = async () => {
+  try {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    
+    if (error || !session) {
+      // Try to refresh
+      const { data: { session: refreshedSession }, error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError || !refreshedSession) {
+        console.log('Session cannot be recovered');
+        return false;
+      }
+      return true;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error ensuring valid session:', err);
+    try {
+      const { data: { session }, error } = await supabase.auth.refreshSession();
+      return !error && !!session;
+    } catch {
+      return false;
+    }
   }
 };
