@@ -49,7 +49,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase, getProducts, getStores, getEmployeeByEmail, ensureValidSession } from '@/lib/supabaseClient';
+import { supabase, getProducts, getStores, getEmployeeByEmail, ensureValidSession, getEmployeeStores } from '@/lib/supabaseClient';
 import { formatCurrency } from '@/lib/utils';
 
 // FIXED: Use correct column names and proper filtering
@@ -135,6 +135,7 @@ export default function WorkerPOS() {
   });
   const [workerStoreId, setWorkerStoreId] = useState<string>('');
   const [workerStoreName, setWorkerStoreName] = useState<string>('');
+  const [assignedStores, setAssignedStores] = useState<Store[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [saveAsDebt, setSaveAsDebt] = useState(false);
 
@@ -160,26 +161,40 @@ export default function WorkerPOS() {
         
         try {
           employee = await employeePromise;
-          if (employee?.store_id) {
-            storeId = employee.store_id;
-            setWorkerStoreId(storeId);
+          if (employee?.id) {
+            // Load all assigned stores for this worker
+            const stores = await getEmployeeStores(String(employee.id));
             
-            // Fetch store name and products in parallel
-            const [storeRes, storeProducts] = await Promise.all([
-              supabase
+            if (stores && stores.length > 0) {
+              setAssignedStores(stores);
+              
+              // Use primary store, or first store if no primary
+              const primaryStore = stores.find(s => s.is_primary) || stores[0];
+              storeId = primaryStore.store_id;
+              setWorkerStoreId(storeId);
+              setWorkerStoreName(primaryStore.name || primaryStore.store_id);
+            } else if (employee?.store_id) {
+              // Fallback to legacy single store_id
+              storeId = employee.store_id;
+              setWorkerStoreId(storeId);
+              
+              const storeRes = await supabase
                 .from('stores')
                 .select('name')
                 .eq('id', storeId)
-                .single(),
-              fetchWorkerProducts(storeId)
-            ]);
-            
-            if (storeRes.data?.name) {
-              setWorkerStoreName(storeRes.data.name);
+                .single();
+              
+              if (storeRes.data?.name) {
+                setWorkerStoreName(storeRes.data.name);
+              }
             }
             
-            setProducts(storeProducts);
-            setFilteredProducts(storeProducts);
+            // Fetch products for the selected store
+            if (storeId) {
+              const storeProducts = await fetchWorkerProducts(storeId);
+              setProducts(storeProducts);
+              setFilteredProducts(storeProducts);
+            }
           } else if (!employee) {
             console.warn('Employee record not found');
             toast({
@@ -224,6 +239,46 @@ export default function WorkerPOS() {
       toast({
         title: 'Erreur',
         description: 'Impossible d\'actualiser les produits',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  // --- Switch Store ---
+  const handleSwitchStore = async (storeId: string) => {
+    if (!storeId || storeId === workerStoreId) return;
+    
+    try {
+      setWorkerStoreId(storeId);
+      
+      // Find store name from assignedStores
+      const store = assignedStores.find(s => s.store_id === storeId);
+      if (store) {
+        setWorkerStoreName(store.name || storeId);
+      }
+      
+      // Clear cart when switching stores
+      if (cart.length > 0) {
+        setCart([]);
+        setEditableTotal(0);
+        setGlobalDiscount({ amount: 0, type: 'fixed' });
+      }
+      
+      // Fetch products for new store
+      const storeProducts = await fetchWorkerProducts(storeId);
+      setProducts(storeProducts);
+      setFilteredProducts(storeProducts);
+      
+      toast({
+        title: 'Succès',
+        description: `Magasin changé à ${store?.name || storeId}`,
+        variant: 'default'
+      });
+    } catch (error) {
+      console.error('Error switching store:', error);
+      toast({
+        title: 'Erreur',
+        description: 'Impossible de changer de magasin',
         variant: 'destructive'
       });
     }
@@ -395,15 +450,34 @@ export default function WorkerPOS() {
       <div className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-r from-blue-500/10 via-cyan-500/10 to-purple-500/10 blur-3xl" />
         <div className="relative rounded-3xl backdrop-blur-xl border border-white/20 dark:border-white/10 p-8 shadow-2xl bg-gradient-to-br from-white/40 dark:from-white/5 to-white/20 dark:to-white/10">
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex-1 min-w-[300px]">
               <h1 className="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-cyan-500 to-purple-600">
                 🧮 Point de Vente
               </h1>
-              <p className="text-lg text-gray-600 dark:text-gray-300 mt-3 flex items-center gap-2">
-                <Lock className="h-5 w-5" />
-                Magasin: <span className="font-bold text-blue-600 dark:text-cyan-400">{workerStoreName}</span>
-              </p>
+              <div className="mt-3 space-y-2">
+                {assignedStores.length > 1 ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Lock className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+                    <select
+                      value={workerStoreId}
+                      onChange={(e) => handleSwitchStore(e.target.value)}
+                      className="px-4 py-2 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white font-bold text-blue-600 dark:text-cyan-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {assignedStores.map((store) => (
+                        <option key={store.store_id} value={store.store_id}>
+                          {store.name} {store.is_primary ? '⭐' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <p className="text-lg text-gray-600 dark:text-gray-300 flex items-center gap-2">
+                    <Lock className="h-5 w-5" />
+                    Magasin: <span className="font-bold text-blue-600 dark:text-cyan-400">{workerStoreName}</span>
+                  </p>
+                )}
+              </div>
             </div>
             <Button
               onClick={handleRefresh}

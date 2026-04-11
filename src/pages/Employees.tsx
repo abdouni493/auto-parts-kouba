@@ -55,7 +55,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth, getStores, createEmployeeAuthUser } from '@/lib/supabaseClient';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth, getStores, createEmployeeAuthUser, getEmployeeStores, updateEmployeeStores } from '@/lib/supabaseClient';
 import { useToast } from '@/hooks/use-toast';
 
 interface Employee {
@@ -75,6 +75,7 @@ interface Employee {
   username?: string;
   hasAccount?: boolean;
   store_id?: string;
+  assigned_stores?: string[];
   lastPayment?: {
     amount: number;
     date: string;
@@ -124,7 +125,8 @@ export default function Employees() {
     username: '',
     password: '',
     confirmPassword: '',
-    store_id: ''
+    store_id: '',
+    assigned_stores: [] as string[]
   });
 
   const [paymentData, setPaymentData] = useState({
@@ -236,14 +238,33 @@ export default function Employees() {
       username: '',
       password: '',
       confirmPassword: '',
-      store_id: ''
+      store_id: '',
+      assigned_stores: []
     });
     setIsDialogOpen(true);
   };
 
-  const handleEditEmployee = (employee: Employee) => {
+  const handleEditEmployee = async (employee: Employee) => {
     setSelectedEmployee(employee);
     setDialogMode('edit');
+    
+    // Load existing store assignments from database
+    let existingStores: string[] = [employee.store_id].filter(Boolean);
+    let primaryStore = employee.store_id || '';
+    
+    try {
+      const stores = await getEmployeeStores(String(employee.id));
+      if (stores && stores.length > 0) {
+        existingStores = stores.map(s => s.store_id);
+        const primaryStoreData = stores.find(s => s.is_primary);
+        if (primaryStoreData) {
+          primaryStore = primaryStoreData.store_id;
+        }
+      }
+    } catch (error) {
+      console.error('Error loading employee stores:', error);
+    }
+    
     setFormData({
       full_name: employee.full_name || '',
       email: employee.email || '',
@@ -255,7 +276,8 @@ export default function Employees() {
       username: employee.username || '',
       password: '',
       confirmPassword: '',
-      store_id: employee.store_id || ''
+      store_id: primaryStore,
+      assigned_stores: existingStores
     });
     setIsDialogOpen(true);
   };
@@ -371,7 +393,26 @@ export default function Employees() {
           store_id: formData.store_id || null,
           user_id: authUserId || null
         };
-        await createEmployee(newEmployeeData);
+        const createdEmployee = await createEmployee(newEmployeeData);
+        
+        // Save multiple store assignments
+        if (createdEmployee?.id && formData.assigned_stores && formData.assigned_stores.length > 0) {
+          // Filter out empty strings from assigned_stores
+          const validStoreIds = formData.assigned_stores.filter((id: string) => id && id.trim() !== '');
+          if (validStoreIds.length > 0) {
+            // Use primary store or first valid store
+            const primaryStoreId = formData.store_id && validStoreIds.includes(formData.store_id) 
+              ? formData.store_id 
+              : validStoreIds[0];
+            
+            await updateEmployeeStores(
+              createdEmployee.id,
+              validStoreIds,
+              primaryStoreId
+            );
+          }
+        }
+        
         toast({
           title: language === 'ar' ? 'تم الإنشاء' : 'Created',
           description: language === 'ar' ? 'تم إنشاء الموظف بنجاح' : 'Employee created successfully',
@@ -390,6 +431,25 @@ export default function Employees() {
           store_id: formData.store_id || null
         };
         await updateEmployee(String(selectedEmployee.id), updatedEmployeeData);
+        
+        // Update employee's multiple store assignments
+        if (formData.assigned_stores && formData.assigned_stores.length > 0) {
+          // Filter out empty strings from assigned_stores
+          const validStoreIds = formData.assigned_stores.filter((id: string) => id && id.trim() !== '');
+          if (validStoreIds.length > 0) {
+            // Use primary store or first valid store
+            const primaryStoreId = formData.store_id && validStoreIds.includes(formData.store_id) 
+              ? formData.store_id 
+              : validStoreIds[0];
+            
+            await updateEmployeeStores(
+              String(selectedEmployee.id),
+              validStoreIds,
+              primaryStoreId
+            );
+          }
+        }
+        
         toast({
           title: language === 'ar' ? 'تم التحديث' : 'Updated',
           description: language === 'ar' ? 'تم تحديث بيانات الموظف بنجاح' : 'Employee updated successfully',
@@ -953,23 +1013,79 @@ export default function Employees() {
                     </div>
                   </motion.div>
 
+                  {/* Multiple Store Selection */}
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-green-50 to-teal-50 dark:from-green-900/20 dark:to-teal-900/20 border-2 border-green-200 dark:border-green-800">
-                    <Label htmlFor="store" className="font-bold text-lg text-green-700 dark:text-green-400">
-                      🏪 {language === 'ar' ? 'المتجر / المغازة' : 'Magasin'} <span className="text-red-500">*</span>
+                    <Label className="font-bold text-lg text-green-700 dark:text-green-400">
+                      🏪 {language === 'ar' ? 'المتاجر المتعددة' : 'Magasins Multiples'} <span className="text-red-500">*</span>
                     </Label>
-                    <Select value={formData.store_id} onValueChange={(value: string) => setFormData({...formData, store_id: value})}>
-                      <SelectTrigger className="border-2 border-green-300 dark:border-green-700 rounded-lg font-bold">
-                        <SelectValue placeholder={language === 'ar' ? 'اختر المتجر' : 'Sélectionner un magasin'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {stores.map((store) => (
-                          <SelectItem key={store.id} value={store.id}>
-                            🏪 {store.name} {store.city ? `(${store.city})` : ''}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="space-y-2 max-h-56 overflow-y-auto border-2 border-green-300 dark:border-green-700 rounded-lg p-3 bg-white dark:bg-slate-900">
+                      {stores.length > 0 ? (
+                        stores.map((store) => (
+                          <div key={store.id} className="flex items-center gap-3 p-2 hover:bg-green-100 dark:hover:bg-green-900/30 rounded transition-colors">
+                            <input
+                              type="checkbox"
+                              id={`store-${store.id}`}
+                              checked={formData.assigned_stores?.includes(store.id) || false}
+                              onChange={(e) => {
+                                const storeIds = formData.assigned_stores || [];
+                                if (e.target.checked) {
+                                  setFormData({
+                                    ...formData,
+                                    assigned_stores: [...storeIds, store.id],
+                                    store_id: formData.store_id || store.id
+                                  });
+                                } else {
+                                  const updated = storeIds.filter(id => id !== store.id);
+                                  setFormData({
+                                    ...formData,
+                                    assigned_stores: updated,
+                                    store_id: formData.store_id === store.id && updated.length > 0 ? updated[0] : ''
+                                  });
+                                }
+                              }}
+                              className="rounded w-4 h-4 cursor-pointer accent-green-600"
+                            />
+                            <label htmlFor={`store-${store.id}`} className="text-sm font-medium cursor-pointer flex-1 text-slate-700 dark:text-slate-300">
+                              {store.name} {store.city ? `(${store.city})` : ''}
+                            </label>
+                            {formData.store_id === store.id && formData.assigned_stores?.includes(store.id) && (
+                              <span className="text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full font-semibold">
+                                ⭐ {language === 'ar' ? 'أساسي' : 'Principal'}
+                              </span>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-slate-500 dark:text-slate-400 italic">
+                          {language === 'ar' ? 'لا توجد متاجر متاحة' : 'Aucun magasin disponible'}
+                        </p>
+                      )}
+                    </div>
                   </motion.div>
+
+                  {/* Primary Store Selector */}
+                  {formData.assigned_stores && formData.assigned_stores.length > 0 && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="space-y-3 p-5 rounded-xl bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 border-2 border-blue-200 dark:border-blue-800">
+                      <Label htmlFor="primaryStore" className="font-bold text-lg text-blue-700 dark:text-blue-400">
+                        ⭐ {language === 'ar' ? 'المتجر الأساسي' : 'Magasin Principal'}
+                      </Label>
+                      <Select value={formData.store_id || formData.assigned_stores[0] || ''} onValueChange={(value: string) => setFormData({...formData, store_id: value})}>
+                        <SelectTrigger className="border-2 border-blue-300 dark:border-blue-700 rounded-lg font-bold">
+                          <SelectValue placeholder={language === 'ar' ? 'اختر المتجر الأساسي' : 'Sélectionnez magasin principal'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {formData.assigned_stores.map((storeId) => {
+                            const store = stores.find(s => s.id === storeId);
+                            return store ? (
+                              <SelectItem key={store.id} value={store.id}>
+                                🏪 {store.name}
+                              </SelectItem>
+                            ) : null;
+                          })}
+                        </SelectContent>
+                      </Select>
+                    </motion.div>
+                  )}
                 </TabsContent>
 
                 {/* Account Tab */}

@@ -910,3 +910,173 @@ export const ensureValidSession = async () => {
     }
   }
 };
+
+// ========== EMPLOYEE MULTIPLE STORES ==========
+
+/**
+ * Get all stores assigned to an employee
+ */
+export const getEmployeeStores = async (employeeId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('employee_stores')
+      .select(`
+        id,
+        store_id,
+        is_primary,
+        assigned_date,
+        stores:store_id (
+          id,
+          name,
+          city,
+          address
+        )
+      `)
+      .eq('employee_id', employeeId)
+      .order('is_primary', { ascending: false })
+      .order('assigned_date', { ascending: true });
+
+    if (error) throw error;
+
+    return data?.map((es: any) => ({
+      id: es.store_id,
+      store_id: es.store_id,
+      name: es.stores?.name,
+      city: es.stores?.city,
+      address: es.stores?.address,
+      is_primary: es.is_primary
+    })) || [];
+  } catch (error) {
+    console.error('Error fetching employee stores:', error);
+    throw error;
+  }
+};
+
+/**
+ * Update employee store assignments (multiple stores)
+ */
+export const updateEmployeeStores = async (
+  employeeId: string,
+  storeIds: string[],
+  primaryStoreId: string
+) => {
+  try {
+    // Validate inputs
+    if (!employeeId || !primaryStoreId) {
+      throw new Error('Employee ID and Primary Store ID are required');
+    }
+
+    if (!storeIds || storeIds.length === 0) {
+      console.warn('No store IDs provided for employee:', employeeId);
+      return false;
+    }
+
+    if (!storeIds.includes(primaryStoreId)) {
+      throw new Error('Primary store must be in the list of assigned stores');
+    }
+
+    // Verify employee exists
+    const { data: employee, error: employeeError } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('id', employeeId)
+      .single();
+
+    if (employeeError || !employee) {
+      throw new Error('Employee not found: ' + employeeId);
+    }
+
+    // Delete existing assignments
+    const { error: deleteError } = await supabase
+      .from('employee_stores')
+      .delete()
+      .eq('employee_id', employeeId);
+
+    if (deleteError) {
+      console.error('Error deleting existing assignments:', deleteError);
+      throw deleteError;
+    }
+
+    // Prepare new assignments with validated data
+    const assignments = storeIds.map(storeId => ({
+      employee_id: employeeId,
+      store_id: storeId,
+      is_primary: storeId === primaryStoreId
+    }));
+
+    // Insert new assignments
+    const { data: insertedData, error: insertError } = await supabase
+      .from('employee_stores')
+      .insert(assignments)
+      .select();
+
+    if (insertError) {
+      console.error('Error inserting assignments:', insertError);
+      throw insertError;
+    }
+
+    console.log('Store assignments updated successfully:', insertedData);
+    return true;
+  } catch (error) {
+    console.error('Error updating employee stores:', error);
+    throw error;
+  }
+};
+
+/**
+ * Assign a single store to an employee
+ */
+export const assignStoreToEmployee = async (
+  employeeId: string,
+  storeId: string,
+  isPrimary: boolean = false
+) => {
+  try {
+    if (isPrimary) {
+      // Remove primary flag from other stores
+      await supabase
+        .from('employee_stores')
+        .update({ is_primary: false })
+        .eq('employee_id', employeeId);
+    }
+
+    const { data, error } = await supabase
+      .from('employee_stores')
+      .upsert({
+        employee_id: employeeId,
+        store_id: storeId,
+        is_primary: isPrimary
+      }, {
+        onConflict: 'employee_id,store_id'
+      });
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error assigning store to employee:', error);
+    throw error;
+  }
+};
+
+/**
+ * Remove store from employee
+ */
+export const removeStoreFromEmployee = async (
+  employeeId: string,
+  storeId: string
+) => {
+  try {
+    const { error } = await supabase
+      .from('employee_stores')
+      .delete()
+      .eq('employee_id', employeeId)
+      .eq('store_id', storeId);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error removing store from employee:', error);
+    throw error;
+  }
+};
+
