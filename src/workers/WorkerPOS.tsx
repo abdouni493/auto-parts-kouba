@@ -140,102 +140,94 @@ export default function WorkerPOS() {
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // --- Fetch Worker's Store ---
-  const fetchWorkerStore = async () => {
-    if (!user?.email) return;
-    try {
-      // Ensure we have a valid session before making queries
-      const isSessionValid = await ensureValidSession();
-      if (!isSessionValid) {
-        console.warn('Session validation failed');
-      }
-
-      let employee = await getEmployeeByEmail(user.email);
-      
-      // If that fails, ensure session is valid and try again
-      if (!employee) {
-        const isValid = await ensureValidSession();
-        if (isValid) {
-          employee = await getEmployeeByEmail(user.email);
-        }
-      }
-      
-      if (employee?.store_id) {
-        setWorkerStoreId(employee.store_id);
-        
-        // Get store name
-        const storeRes = await supabase
-          .from('stores')
-          .select('name')
-          .eq('id', employee.store_id)
-          .single();
-        
-        if (storeRes.data?.name) {
-          setWorkerStoreName(storeRes.data.name);
-        }
-      } else if (!employee) {
-        console.warn('Employee record not found');
-        toast({
-          title: 'Attention',
-          description: 'Enregistrement d\'employé non trouvé. Veuillez vous reconnecter.',
-          variant: 'destructive'
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching worker store:', error);
-      toast({
-        title: 'Erreur',
-        description: 'Impossible de charger le magasin. Veuillez vous reconnecter.',
-        variant: 'destructive'
-      });
-    }
-  };
-
-  // --- Fetch Products for Worker's Store ---
-  const fetchProducts = async () => {
-    try {
-      if (!workerStoreId) return;
-      
-      // Ensure session is valid
-      await ensureValidSession();
-      
-      // FIXED: Use correct function to avoid 400 error
-      let storeProducts = await fetchWorkerProducts(workerStoreId);
-      
-      // If that fails, ensure session is valid and try again
-      if (storeProducts.length === 0) {
-        const isValid = await ensureValidSession();
-        if (isValid) {
-          storeProducts = await fetchWorkerProducts(workerStoreId);
-        }
-      }
-      
-      setProducts(storeProducts);
-      setFilteredProducts(storeProducts);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-      toast({
-        title: 'Erreur',
-        description: 'Impossible de charger les produits. Veuillez vous reconnecter.',
-        variant: 'destructive'
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // --- Initialize ---
+  // --- Initialize and fetch data in parallel ---
   useEffect(() => {
-    if (user) {
-      fetchWorkerStore();
-    }
+    if (!user?.email) return;
+
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Ensure we have a valid session before making queries
+        await ensureValidSession();
+
+        // Fetch employee and products in parallel
+        const employeePromise = getEmployeeByEmail(user.email);
+        
+        // Start fetching without waiting for employee first
+        let storeId = '';
+        let employee = null;
+        
+        try {
+          employee = await employeePromise;
+          if (employee?.store_id) {
+            storeId = employee.store_id;
+            setWorkerStoreId(storeId);
+            
+            // Fetch store name and products in parallel
+            const [storeRes, storeProducts] = await Promise.all([
+              supabase
+                .from('stores')
+                .select('name')
+                .eq('id', storeId)
+                .single(),
+              fetchWorkerProducts(storeId)
+            ]);
+            
+            if (storeRes.data?.name) {
+              setWorkerStoreName(storeRes.data.name);
+            }
+            
+            setProducts(storeProducts);
+            setFilteredProducts(storeProducts);
+          } else if (!employee) {
+            console.warn('Employee record not found');
+            toast({
+              title: 'Attention',
+              description: 'Enregistrement d\'employé non trouvé. Veuillez vous reconnecter.',
+              variant: 'destructive'
+            });
+          }
+        } catch (error) {
+          console.error('Error fetching employee:', error);
+          toast({
+            title: 'Erreur',
+            description: 'Impossible de charger le magasin. Veuillez vous reconnecter.',
+            variant: 'destructive'
+          });
+        }
+      } catch (error) {
+        console.error('Error during initialization:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
   }, [user]);
 
-  useEffect(() => {
-    if (workerStoreId) {
-      fetchProducts();
+  // --- Refresh Products ---
+  const handleRefresh = async () => {
+    if (!workerStoreId) return;
+    
+    try {
+      const storeProducts = await fetchWorkerProducts(workerStoreId);
+      setProducts(storeProducts);
+      setFilteredProducts(storeProducts);
+      toast({
+        title: 'Succès',
+        description: 'Produits actualisés avec succès',
+        variant: 'default'
+      });
+    } catch (error) {
+      console.error('Error refreshing products:', error);
+      toast({
+        title: 'Erreur',
+        description: 'Impossible d\'actualiser les produits',
+        variant: 'destructive'
+      });
     }
-  }, [workerStoreId]);
+  };
 
   // --- Search Filter ---
   useEffect(() => {
@@ -414,7 +406,7 @@ export default function WorkerPOS() {
               </p>
             </div>
             <Button
-              onClick={fetchProducts}
+              onClick={handleRefresh}
               size="lg"
               className="rounded-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white shadow-lg gap-2"
             >
