@@ -136,6 +136,7 @@ export default function WorkerPOS() {
   const [workerStoreId, setWorkerStoreId] = useState<string>('');
   const [workerStoreName, setWorkerStoreName] = useState<string>('');
   const [assignedStores, setAssignedStores] = useState<Store[]>([]);
+  const [allStores, setAllStores] = useState<Store[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [saveAsDebt, setSaveAsDebt] = useState(false);
 
@@ -151,6 +152,14 @@ export default function WorkerPOS() {
         
         // Ensure we have a valid session before making queries
         await ensureValidSession();
+
+        // Load ALL stores from DB so the switcher shows every magazine
+        const allStoresRes = await supabase
+          .from('stores')
+          .select('id, name')
+          .eq('is_active', true)
+          .order('name');
+        if (allStoresRes.data) setAllStores(allStoresRes.data);
 
         // Fetch employee and products in parallel
         const employeePromise = getEmployeeByEmail(user.email);
@@ -251,24 +260,24 @@ export default function WorkerPOS() {
     try {
       setWorkerStoreId(storeId);
       
-      // Find store name from assignedStores
-      const store = assignedStores.find(s => s.store_id === storeId);
+      // Find store name from allStores
+      const store = allStores.find(s => s.id === storeId);
       if (store) {
         setWorkerStoreName(store.name || storeId);
       }
-      
+
       // Clear cart when switching stores
       if (cart.length > 0) {
         setCart([]);
         setEditableTotal(0);
         setGlobalDiscount({ amount: 0, type: 'fixed' });
       }
-      
+
       // Fetch products for new store
       const storeProducts = await fetchWorkerProducts(storeId);
       setProducts(storeProducts);
       setFilteredProducts(storeProducts);
-      
+
       toast({
         title: 'Succès',
         description: `Magasin changé à ${store?.name || storeId}`,
@@ -470,20 +479,20 @@ export default function WorkerPOS() {
                 🧮 Point de Vente
               </h1>
               <div className="mt-3 space-y-2">
-                {assignedStores.length > 1 ? (
+                {allStores.length > 0 ? (
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm text-gray-600 dark:text-gray-300 font-medium">🏪 Magasin:</span>
-                    {assignedStores.map((store) => (
+                    {allStores.map((store) => (
                       <button
-                        key={store.store_id}
-                        onClick={() => handleSwitchStore(store.store_id)}
+                        key={store.id}
+                        onClick={() => handleSwitchStore(store.id)}
                         className={`px-4 py-1.5 rounded-full text-sm font-bold transition-all border-2 ${
-                          workerStoreId === store.store_id
+                          workerStoreId === store.id
                             ? 'bg-blue-600 text-white border-blue-600 shadow-md'
                             : 'bg-white dark:bg-slate-800 text-blue-600 dark:text-cyan-400 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700'
                         }`}
                       >
-                        {store.name}{store.is_primary ? ' ⭐' : ''}
+                        {store.name}
                       </button>
                     ))}
                   </div>
@@ -539,8 +548,10 @@ export default function WorkerPOS() {
                 <thead className="sticky top-0 bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950 dark:to-cyan-950 border-b border-slate-200 dark:border-slate-700">
                   <tr>
                     <th className="px-3 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">📦 Produit</th>
+                    <th className="px-3 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">🏷️ Code Barre</th>
                     <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">📚 Étagère</th>
                     <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">💰 Prix</th>
+                    <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">⏱️ Dernier Prix</th>
                     <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">📊 Stock</th>
                   </tr>
                 </thead>
@@ -556,11 +567,23 @@ export default function WorkerPOS() {
                         <p className="font-semibold text-slate-800 dark:text-slate-200">{product.name}</p>
                         {product.brand && <p className="text-xs text-slate-500">{product.brand}</p>}
                       </td>
+                      <td className="px-3 py-3 text-slate-600 dark:text-slate-400 font-mono text-xs">
+                        {product.barcode || '—'}
+                      </td>
                       <td className="px-3 py-3 text-center text-slate-600 dark:text-slate-400 font-mono text-xs">
                         {product.shelving_location || '—'}{product.shelving_line ? ` / L${product.shelving_line}` : ''}
                       </td>
                       <td className="px-3 py-3 text-center font-bold text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(product.selling_price)}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        {product.last_price_to_sell ? (
+                          <span className="font-semibold text-purple-600 dark:text-purple-400 text-xs">
+                            {formatCurrency(product.last_price_to_sell)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-xs">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-center">
                         <span className={`font-bold px-2 py-1 rounded-full text-xs ${product.current_quantity === 0 ? 'bg-red-100 text-red-700' : product.current_quantity <= product.min_quantity ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
@@ -570,7 +593,7 @@ export default function WorkerPOS() {
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan={4} className="text-center py-12 text-gray-500">📭 Aucun produit trouvé</td>
+                      <td colSpan={6} className="text-center py-12 text-gray-500">📭 Aucun produit trouvé</td>
                     </tr>
                   )}
                 </tbody>
