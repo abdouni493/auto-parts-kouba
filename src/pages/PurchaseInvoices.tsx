@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   Dialog,
@@ -84,6 +83,13 @@ interface Supplier {
   name: string;
 }
 
+interface InvoiceLineItem {
+  product: Product;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+}
+
 export default function PurchaseInvoices() {
   const { toast } = useToast();
   const { language, isRTL } = useLanguage();
@@ -92,15 +98,19 @@ export default function PurchaseInvoices() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<PurchaseInvoice | null>(null);
+  const [viewDetailsOpen, setViewDetailsOpen] = useState(false);
+  const [editInvoiceOpen, setEditInvoiceOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<PurchaseInvoice | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [addInvoiceOpen, setAddInvoiceOpen] = useState(false);
-  const [productSearch, setProductSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<Product[]>([]);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [formData, setFormData] = useState<Product | null>(null);
-  const [quantity, setQuantity] = useState(1);
-  const [amountPaid, setAmountPaid] = useState(0);
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>('');
+  // Multi-product cart state (PROMPT 4)
+  const [invoiceItems, setInvoiceItems] = useState<InvoiceLineItem[]>([]);
+  const [currentProductSearch, setCurrentProductSearch] = useState('');
+  const [currentProductResult, setCurrentProductResult] = useState<Product[]>([]);
+  const [currentSelectedProduct, setCurrentSelectedProduct] = useState<Product | null>(null);
+  const [currentQuantity, setCurrentQuantity] = useState(1);
+  const [invoiceAmountPaid, setInvoiceAmountPaid] = useState(0);
 
   // Translations dictionary
   const translations: { [key: string]: { [key: string]: string } } = {
@@ -275,10 +285,10 @@ export default function PurchaseInvoices() {
     loadData();
   }, []);
 
-  // Auto-search products
+  // Auto-search products for multi-product cart
   useEffect(() => {
     const searchProducts = async () => {
-      if (productSearch.length > 1) {
+      if (currentProductSearch.length > 1) {
         try {
           const { data, error } = await supabase
             .from('products')
@@ -305,30 +315,36 @@ export default function PurchaseInvoices() {
               min_quantity
             `
             )
-            .or(`name.ilike.%${productSearch}%,barcode.ilike.%${productSearch}%,brand.ilike.%${productSearch}%`)
+            .or(`name.ilike.%${currentProductSearch}%,barcode.ilike.%${currentProductSearch}%,brand.ilike.%${currentProductSearch}%`)
             .limit(10);
 
           if (error) throw error;
-          
+
           const formatted = (data || []).map((p: any) => ({
             ...p,
             category_name: p.categories?.name || '',
             supplier_name: p.suppliers?.name || '',
             store_name: p.stores?.name || '',
           }));
-          
-          setSearchResults(formatted);
+
+          setCurrentProductResult(formatted);
         } catch (error) {
           console.error('Error searching products:', error);
         }
       } else {
-        setSearchResults([]);
+        setCurrentProductResult([]);
       }
     };
 
     const timeout = setTimeout(searchProducts, 300);
     return () => clearTimeout(timeout);
-  }, [productSearch]);
+  }, [currentProductSearch]);
+
+  // Auto-fill invoiceAmountPaid with total when items change (PROMPT 2)
+  useEffect(() => {
+    const newTotal = invoiceItems.reduce((sum, item) => sum + item.total_price, 0);
+    setInvoiceAmountPaid(newTotal);
+  }, [invoiceItems]);
 
   const loadData = async () => {
     setLoading(true);
@@ -391,42 +407,61 @@ export default function PurchaseInvoices() {
     }
   };
 
-  const handleSelectProduct = (product: Product) => {
-    setSelectedProduct(product);
-    setFormData(product);
-    setProductSearch('');
-    setSearchResults([]);
+  // Add item to the invoice cart (PROMPT 4)
+  const addItemToInvoice = () => {
+    if (!currentSelectedProduct) return;
+    const newItem: InvoiceLineItem = {
+      product: currentSelectedProduct,
+      quantity: currentQuantity,
+      unit_price: currentSelectedProduct.buying_price,
+      total_price: currentSelectedProduct.buying_price * currentQuantity,
+    };
+    setInvoiceItems(prev => [...prev, newItem]);
+    setCurrentSelectedProduct(null);
+    setCurrentProductSearch('');
+    setCurrentQuantity(1);
   };
 
+  // Create invoice with multiple products (PROMPT 4)
   const handleCreateInvoice = async () => {
-    if (!formData || !selectedSupplierId || quantity <= 0) {
+    if (invoiceItems.length === 0 || !selectedSupplierId) {
       toast({
         title: getText('error'),
-        description: language === 'ar' ? 'يرجى ملء جميع الحقول المطلوبة' : 'Veuillez remplir tous les champs requis',
+        description: language === 'ar' ? 'يرجى إضافة منتج واختيار مورد' : 'Veuillez ajouter un produit et sélectionner un fournisseur',
         variant: 'destructive',
       });
       return;
     }
 
     try {
-      const invoiceNumber = `INV-${Date.now()}`;
-      const subtotal = formData.buying_price * quantity;
-      const totalAmount = subtotal;
+      const totalAmount = invoiceItems.reduce((sum, item) => sum + item.total_price, 0);
+      const { data: lastInv } = await supabase
+        .from('invoices')
+        .select('invoice_number')
+        .eq('type', 'purchase')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      let nextNum = 1;
+      if (lastInv?.invoice_number) {
+        const n = parseInt(lastInv.invoice_number.replace(/\D/g, ''), 10);
+        if (!isNaN(n)) nextNum = n + 1;
+      }
+      const invoiceNumber = `ACH-${String(nextNum).padStart(6, '0')}`;
 
-      // Create invoice
       const { data: invoiceData, error: invoiceError } = await supabase
         .from('invoices')
         .insert({
           invoice_number: invoiceNumber,
           type: 'purchase',
           supplier_id: selectedSupplierId,
-          subtotal,
+          subtotal: totalAmount,
           discount_amount: 0,
           total_amount: totalAmount,
-          amount_paid: amountPaid,
-          status: amountPaid >= totalAmount ? 'paid' : 'pending',
-          payment_method: amountPaid > 0 ? 'cash' : null,
-          payment_date: amountPaid >= totalAmount ? new Date().toISOString() : null,
+          amount_paid: invoiceAmountPaid,
+          status: invoiceAmountPaid >= totalAmount ? 'paid' : 'pending',
+          payment_method: invoiceAmountPaid > 0 ? 'cash' : null,
+          payment_date: invoiceAmountPaid >= totalAmount ? new Date().toISOString() : null,
           invoice_date: new Date().toISOString(),
           notes: '',
         })
@@ -435,60 +470,23 @@ export default function PurchaseInvoices() {
 
       if (invoiceError) throw invoiceError;
 
-      // Create invoice item
-      const { error: itemError } = await supabase.from('invoice_items').insert({
-        invoice_id: invoiceData.id,
-        product_id: formData.id,
-        product_name: formData.name,
-        quantity,
-        unit_price: formData.buying_price,
-        total_price: subtotal,
-      });
+      // Insert all invoice items + update each product stock
+      for (const item of invoiceItems) {
+        await supabase.from('invoice_items').insert({
+          invoice_id: invoiceData.id,
+          product_id: item.product.id,
+          product_name: item.product.name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+        });
 
-      if (itemError) throw itemError;
-
-      // Update product with edited information and add purchased quantity to stock
-      const currentInitial = parseInt(formData.initial_quantity?.toString() || '0') || 0;
-      const currentCurrent = parseInt(formData.current_quantity?.toString() || '0') || 0;
-      const purchaseQty = parseInt(quantity?.toString() || '0') || 0;
-      
-      const newInitialQuantity = currentInitial + purchaseQty;
-      const newCurrentQuantity = currentCurrent + purchaseQty;
-      
-      console.log('Purchase Invoice Update:', {
-        productId: formData.id,
-        currentInitial,
-        currentCurrent,
-        purchaseQty,
-        newInitialQuantity,
-        newCurrentQuantity,
-      });
-      
-      // Prepare update data with all tarification and product information
-      const updateData = {
-        // Tarification (Pricing Information)
-        buying_price: parseFloat(formData.buying_price?.toString() || '0') || 0,
-        margin_percent: parseFloat(formData.margin_percent?.toString() || '0') || 0,
-        selling_price: parseFloat(formData.selling_price?.toString() || '0') || 0,
-        // Location Information
-        shelving_location: formData.shelving_location || '',
-        shelving_line: formData.shelving_line || 0,
-        // Quantity Information (add purchased quantity to existing stock)
-        initial_quantity: newInitialQuantity,
-        current_quantity: newCurrentQuantity,
-        min_quantity: parseFloat(formData.min_quantity?.toString() || '0') || 0,
-      };
-      
-      console.log('Update data being sent:', updateData);
-      
-      const { error: updateError } = await supabase
-        .from('products')
-        .update(updateData)
-        .eq('id', formData.id);
-
-      if (updateError) {
-        console.error('Update error:', updateError);
-        throw updateError;
+        const newInitial = (item.product.initial_quantity || 0) + item.quantity;
+        const newCurrent = (item.product.current_quantity || 0) + item.quantity;
+        await supabase.from('products').update({
+          initial_quantity: newInitial,
+          current_quantity: newCurrent,
+        }).eq('id', item.product.id);
       }
 
       toast({
@@ -496,13 +494,12 @@ export default function PurchaseInvoices() {
         description: language === 'ar' ? 'تم إنشاء الفاتورة بنجاح' : 'Facture créée avec succès',
       });
 
-      // Reset form and reload
       setAddInvoiceOpen(false);
-      setSelectedProduct(null);
-      setFormData(null);
-      setProductSearch('');
-      setQuantity(1);
-      setAmountPaid(0);
+      setInvoiceItems([]);
+      setCurrentSelectedProduct(null);
+      setCurrentProductSearch('');
+      setCurrentQuantity(1);
+      setInvoiceAmountPaid(0);
       setSelectedSupplierId('');
       loadData();
     } catch (error) {
@@ -512,6 +509,45 @@ export default function PurchaseInvoices() {
         description: language === 'ar' ? 'فشل إنشاء الفاتورة' : 'Erreur lors de la création de la facture',
         variant: 'destructive',
       });
+    }
+  };
+
+  // Print invoice (PROMPT 3)
+  const handlePrintInvoice = (invoice: PurchaseInvoice) => {
+    const printContent = `
+      <html><head><title>Facture ${invoice.invoice_number}</title>
+      <style>body{font-family:Arial;padding:20px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:8px} th{background:#f5f5f5}</style>
+      </head><body>
+      <h2>Facture d'Achat: ${invoice.invoice_number}</h2>
+      <p>Fournisseur: ${invoice.supplier_name}</p>
+      <p>Date: ${formatDate(invoice.invoice_date)}</p>
+      <table><thead><tr><th>Produit</th><th>Qté</th><th>Prix Unitaire</th><th>Total</th></tr></thead>
+      <tbody>${(invoice.items || []).map(item => `<tr><td>${item.product_name}</td><td>${item.quantity}</td><td>${currency(item.unit_price)}</td><td>${currency(item.total_price)}</td></tr>`).join('')}</tbody>
+      </table>
+      <p><strong>Total: ${currency(invoice.total_amount)}</strong></p>
+      <p>Montant Payé: ${currency(invoice.amount_paid || 0)}</p>
+      <p>Reste: ${currency((invoice.total_amount || 0) - (invoice.amount_paid || 0))}</p>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(printContent); w.document.close(); w.print(); }
+  };
+
+  // Edit invoice (PROMPT 3)
+  const handleEditInvoice = async () => {
+    if (!editingInvoice) return;
+    const { error } = await supabase.from('invoices').update({
+      amount_paid: editingInvoice.amount_paid,
+      status: editingInvoice.status,
+      payment_method: editingInvoice.payment_method,
+      notes: editingInvoice.notes,
+      due_date: editingInvoice.due_date,
+    }).eq('id', editingInvoice.id);
+    if (!error) {
+      setEditInvoiceOpen(false);
+      loadData();
+      toast({ title: '✅ Facture mise à jour' });
+    } else {
+      toast({ title: getText('error'), description: error.message, variant: 'destructive' });
     }
   };
 
@@ -666,384 +702,129 @@ export default function PurchaseInvoices() {
           </DialogTrigger>
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>{getText('select_product')}</DialogTitle>
+              <DialogTitle>➕ {getText('add_invoice')}</DialogTitle>
               <DialogDescription>
-                {language === 'ar'
-                  ? 'اختر منتج وأنشئ فاتورة شراء جديدة'
-                  : 'Sélectionnez un produit et créez une nouvelle facture d\'achat'}
+                {language === 'ar' ? 'أضف منتجات للفاتورة ثم اختر المورد' : 'Ajoutez des produits à la facture puis choisissez le fournisseur'}
               </DialogDescription>
             </DialogHeader>
 
-            {!selectedProduct ? (
-              // Product Search Step
-              <div className="space-y-4">
-                <div className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950/20 dark:to-cyan-950/20 p-6 rounded-lg border border-blue-200 dark:border-blue-800">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="text-2xl">🔍</span>
-                    <h3 className="text-lg font-semibold text-blue-900 dark:text-blue-200">
-                      {language === 'ar' ? 'البحث عن المنتج' : 'Rechercher un produit'}
-                    </h3>
-                  </div>
-                  <Input
-                    placeholder={language === 'ar' ? 'ابحث عن المنتج بالاسم أو الرمز أو العلامة التجارية' : 'Recherchez par nom, code ou marque...'}
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    className="mt-2 bg-white dark:bg-slate-900 border-blue-300 dark:border-blue-700"
-                  />
-                </div>
+            <div className="space-y-5">
+              {/* Supplier selector */}
+              <div>
+                <Label className="font-semibold">🏭 {getText('supplier')}</Label>
+                <Select value={selectedSupplierId} onValueChange={setSelectedSupplierId}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder={getText('supplier')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {suppliers.map((sup) => (
+                      <SelectItem key={sup.id} value={sup.id}>{sup.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-                {searchResults.length > 0 && (
-                  <div className="border border-slate-200 dark:border-slate-700 rounded-lg max-h-80 overflow-y-auto bg-white dark:bg-slate-900 shadow-md">
-                    <div className="sticky top-0 bg-gradient-to-r from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-700 p-3 border-b border-slate-200 dark:border-slate-700">
-                      <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                        📦 {searchResults.length} {language === 'ar' ? 'نتيجة' : 'résultat(s)'}
-                      </p>
-                    </div>
-                    {searchResults.map((product, idx) => (
-                      <motion.button
-                        key={product.id}
-                        onClick={() => handleSelectProduct(product)}
-                        className="w-full text-left p-4 hover:bg-blue-100 dark:hover:bg-blue-900/30 border-b last:border-b-0 transition-all hover:shadow-md active:scale-95"
-                        whileHover={{ scale: 1.02, paddingLeft: '1.5rem' }}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.05 }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                              <span className="text-lg">📦</span>
-                              {product.name}
-                            </p>
-                            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1 ml-6">
-                              <span className="inline-flex items-center gap-1">
-                                <span>🏷️</span> {product.barcode}
-                              </span>
-                              {product.brand && (
-                                <>
-                                  {' • '}
-                                  <span className="inline-flex items-center gap-1">
-                                    <span>🎨</span> {product.brand}
-                                  </span>
-                                </>
-                              )}
-                              {' • '}
-                              <span className="inline-flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400">
-                                <span>💰</span> {currency(product.buying_price)}
-                              </span>
-                            </p>
-                          </div>
-                          <Badge className="bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 ml-2">
-                            ➜ {language === 'ar' ? 'اختيار' : 'Sélectionner'}
-                          </Badge>
-                        </div>
-                      </motion.button>
+              {/* Product search + add */}
+              <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 space-y-3">
+                <Label className="font-semibold">🔍 {language === 'ar' ? 'البحث عن منتج' : 'Rechercher un produit'}</Label>
+                <Input
+                  placeholder={language === 'ar' ? 'اسم أو رمز المنتج...' : 'Nom, code barre ou marque...'}
+                  value={currentProductSearch}
+                  onChange={(e) => { setCurrentProductSearch(e.target.value); setCurrentSelectedProduct(null); }}
+                  className="bg-white dark:bg-slate-900"
+                />
+                {currentProductResult.length > 0 && !currentSelectedProduct && (
+                  <div className="border rounded-lg max-h-48 overflow-y-auto bg-white dark:bg-slate-900">
+                    {currentProductResult.map((p) => (
+                      <button key={p.id} type="button"
+                        className="w-full text-left px-4 py-2 hover:bg-blue-100 dark:hover:bg-blue-900/30 border-b last:border-b-0 text-sm"
+                        onClick={() => { setCurrentSelectedProduct(p); setCurrentProductSearch(p.name); setCurrentProductResult([]); }}>
+                        <span className="font-semibold">{p.name}</span>
+                        <span className="text-slate-500 ml-2">{p.barcode} • {currency(p.buying_price)}</span>
+                      </button>
                     ))}
                   </div>
                 )}
-
-                {productSearch && searchResults.length === 0 && (
-                  <motion.div
-                    className="text-center py-12 bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-700"
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                  >
-                    <p className="text-3xl mb-2">📭</p>
-                    <p className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {language === 'ar' ? 'لم يتم العثور على منتجات' : 'Aucun produit trouvé'}
-                    </p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      {language === 'ar'
-                        ? 'حاول البحث باستخدام اسم أو رمز مختلف'
-                        : 'Essayez une recherche différente'}
-                    </p>
-                  </motion.div>
+                {currentSelectedProduct && (
+                  <div className="flex gap-3 items-end">
+                    <div className="flex-1 p-3 bg-green-50 dark:bg-green-900/20 rounded border border-green-200 dark:border-green-800 text-sm">
+                      <p className="font-bold text-green-800 dark:text-green-300">{currentSelectedProduct.name}</p>
+                      <p className="text-slate-600 dark:text-slate-400">{currency(currentSelectedProduct.buying_price)}/{language === 'ar' ? 'وحدة' : 'unité'}</p>
+                    </div>
+                    <div className="w-24">
+                      <Label className="text-xs">{getText('quantity')}</Label>
+                      <Input type="number" min={1} value={currentQuantity}
+                        onChange={(e) => setCurrentQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="mt-1" />
+                    </div>
+                    <Button onClick={addItemToInvoice} className="bg-green-600 hover:bg-green-700 text-white">
+                      ➕ {language === 'ar' ? 'إضافة' : 'Ajouter'}
+                    </Button>
+                  </div>
                 )}
               </div>
-            ) : (
-              // Product Form Step
-              <div className="space-y-6">
-                {/* Product Info Section */}
-                <Card className="border-blue-200 dark:border-blue-800 bg-gradient-to-br from-blue-50 to-blue-100/50 dark:from-blue-950/30 dark:to-blue-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-blue-700 dark:text-blue-300 flex items-center gap-2">
-                      <span className="text-xl">📝</span> {getText('product_info')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div>
-                      <Label>{getText('product_name')}</Label>
-                      <Input
-                        value={formData?.name || ''}
-                        onChange={(e) => setFormData(formData ? { ...formData, name: e.target.value } : null)}
-                        className="mt-2"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>{getText('barcode')}</Label>
-                        <Input value={formData?.barcode || ''} className="mt-2" disabled />
-                      </div>
-                      <div>
-                        <Label>{getText('brand')}</Label>
-                        <Input
-                          value={formData?.brand || ''}
-                          onChange={(e) => setFormData(formData ? { ...formData, brand: e.target.value } : null)}
-                          className="mt-2"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label>{getText('description')}</Label>
-                      <Input
-                        value={formData?.description || ''}
-                        onChange={(e) => setFormData(formData ? { ...formData, description: e.target.value } : null)}
-                        className="mt-2"
-                      />
-                    </div>
-                  </CardContent>
-                </Card>
 
-                {/* Pricing Section */}
-                <Card className="border-amber-200 dark:border-amber-800 bg-gradient-to-br from-amber-50 to-amber-100/50 dark:from-amber-950/30 dark:to-amber-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-amber-700 dark:text-amber-300 flex items-center gap-2">
-                      <span className="text-xl">💰</span> {getText('pricing')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-4 gap-4">
-                      <div>
-                        <Label>{getText('buying_price')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.buying_price || 0}
-                          onChange={(e) =>
-                            setFormData(
-                              formData
-                                ? {
-                                    ...formData,
-                                    buying_price: parseFloat(e.target.value),
-                                  }
-                                : null
-                            )
-                          }
-                          className="mt-2"
-                        />
-                      </div>
-                      <div>
-                        <Label>{getText('margin_percent')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.margin_percent || 0}
-                          onChange={(e) => {
-                            const margin = parseFloat(e.target.value) || 0;
-                            if (formData) {
-                              const newSellingPrice = formData.buying_price * (1 + margin / 100);
-                              setFormData({
-                                ...formData,
-                                margin_percent: margin,
-                                selling_price: Math.round(newSellingPrice * 100) / 100,
-                              });
-                            }
-                          }}
-                          className="mt-2"
-                        />
-                      </div>
-                      <div>
-                        <Label>{getText('selling_price')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.selling_price || 0}
-                          onChange={(e) => {
-                            const sellingPrice = parseFloat(e.target.value) || 0;
-                            if (formData) {
-                              const newMargin = formData.buying_price > 0 
-                                ? ((sellingPrice - formData.buying_price) / formData.buying_price) * 100
-                                : 0;
-                              setFormData({
-                                ...formData,
-                                selling_price: sellingPrice,
-                                margin_percent: Math.round(newMargin * 100) / 100,
-                              });
-                            }
-                          }}
-                          className="mt-2"
-                        />
-                      </div>
-                      <div>
-                        <Label>{getText('last_selling_price')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.last_selling_price || ''}
-                          onChange={(e) => setFormData(formData ? { ...formData, last_selling_price: parseFloat(e.target.value) || 0 } : null)}
-                          placeholder="Dernier prix..."
-                          className="mt-2"
-                        />
-                      </div>
+              {/* Cart table */}
+              {invoiceItems.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-3 py-2 text-left">{language === 'ar' ? 'المنتج' : 'Produit'}</th>
+                        <th className="px-3 py-2 text-center">{getText('quantity')}</th>
+                        <th className="px-3 py-2 text-center">{getText('buying_price')}</th>
+                        <th className="px-3 py-2 text-center">{getText('total')}</th>
+                        <th className="px-3 py-2 text-center"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoiceItems.map((item, idx) => (
+                        <tr key={idx} className="border-t border-slate-100 dark:border-slate-800">
+                          <td className="px-3 py-2 font-medium">{item.product.name}</td>
+                          <td className="px-3 py-2 text-center">{item.quantity}</td>
+                          <td className="px-3 py-2 text-center">{currency(item.unit_price)}</td>
+                          <td className="px-3 py-2 text-center font-bold text-blue-700 dark:text-blue-400">{currency(item.total_price)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <Button size="sm" variant="ghost" className="text-red-500 h-7 px-2"
+                              onClick={() => setInvoiceItems(prev => prev.filter((_, i) => i !== idx))}>✕</Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="bg-slate-50 dark:bg-slate-800/50 px-4 py-3 flex items-center justify-between border-t">
+                    <div className="flex items-center gap-4">
+                      <span className="font-semibold">{getText('total')}: <span className="text-blue-700 dark:text-blue-400 text-lg">{currency(invoiceItems.reduce((s, i) => s + i.total_price, 0))}</span></span>
                     </div>
-                  </CardContent>
-                </Card>
-
-                {/* Quantities Section */}
-                <Card className="border-purple-200 dark:border-purple-800 bg-gradient-to-br from-purple-50 to-purple-100/50 dark:from-purple-950/30 dark:to-purple-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-purple-700 dark:text-purple-300 flex items-center gap-2">
-                      <span className="text-xl">📦</span> {getText('quantities')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>🛒 {language === 'ar' ? 'كمية الشراء' : 'Qté à Acheter'}</Label>
-                        <Input 
-                          type="number"
-                          value={quantity}
-                          onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-                          className="mt-2"
-                          min="1"
-                        />
-                      </div>
-                      <div>
-                        <Label>{getText('min_qty')}</Label>
-                        <Input
-                          type="number"
-                          value={formData?.min_quantity || 0}
-                          onChange={(e) => setFormData(formData ? { ...formData, min_quantity: parseInt(e.target.value) || 0 } : null)}
-                          className="mt-2"
-                        />
-                      </div>
+                    <div className="flex items-center gap-3">
+                      <Label className="text-sm">{getText('amount_paid')}:</Label>
+                      <Input type="number" className="w-32 h-8" value={invoiceAmountPaid}
+                        onChange={(e) => setInvoiceAmountPaid(parseFloat(e.target.value) || 0)} />
                     </div>
-                  </CardContent>
-                </Card>
-
-                {/* Category & Supplier Section */}
-                <Card className="border-green-200 dark:border-green-800 bg-gradient-to-br from-green-50 to-green-100/50 dark:from-green-950/30 dark:to-green-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-green-700 dark:text-green-300 flex items-center gap-2">
-                      <span className="text-xl">🏷️</span> {getText('category_section')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label>{getText('category')}</Label>
-                        <Input value={formData?.category_name || ''} disabled className="mt-2 bg-slate-100 dark:bg-slate-800" />
-                      </div>
-                      <div>
-                        <Label>{getText('supplier_section')}</Label>
-                        <Select value={selectedSupplierId} onValueChange={setSelectedSupplierId}>
-                          <SelectTrigger className="mt-2">
-                            <SelectValue placeholder={getText('supplier')} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {suppliers.map((sup) => (
-                              <SelectItem key={sup.id} value={sup.id}>
-                                {sup.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Store & Shelving Section */}
-                <Card className="border-orange-200 dark:border-orange-800 bg-gradient-to-br from-orange-50 to-orange-100/50 dark:from-orange-950/30 dark:to-orange-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-orange-700 dark:text-orange-300 flex items-center gap-2">
-                      <span className="text-xl">🏪</span> {getText('store_section')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-3 gap-4">
-                      <div>
-                        <Label>{getText('store')}</Label>
-                        <Input value={formData?.store_name || ''} onChange={(e) => setFormData(formData ? { ...formData, store_name: e.target.value } : null)} className="mt-2" />
-                      </div>
-                      <div>
-                        <Label>{getText('shelving')}</Label>
-                        <Input value={formData?.shelving_location || ''} onChange={(e) => setFormData(formData ? { ...formData, shelving_location: e.target.value } : null)} className="mt-2" />
-                      </div>
-                      <div>
-                        <Label>{getText('line')}</Label>
-                        <Input type="number" value={formData?.shelving_line || 0} onChange={(e) => setFormData(formData ? { ...formData, shelving_line: parseInt(e.target.value) || 0 } : null)} className="mt-2" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Payment Summary Section */}
-                <Card className="border-red-200 dark:border-red-800 bg-gradient-to-br from-red-50 to-red-100/50 dark:from-red-950/30 dark:to-red-900/20 shadow-md hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-red-700 dark:text-red-300 flex items-center gap-2">
-                      <span className="text-xl">💳</span> {getText('payment_summary')}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-red-200 dark:border-red-800">
-                      <div>
-                        <Label className="font-semibold text-lg">{getText('total_price')}</Label>
-                        <p className="mt-2 text-2xl font-bold text-red-600 dark:text-red-400">
-                          {currency((formData?.buying_price || 0) * quantity)}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                          {language === 'ar' ? 'السعر الإجمالي المحسوب = السعر × الكمية' : 'Calculé automatiquement = Prix × Quantité'}
-                        </p>
-                      </div>
-                      <div>
-                        <Label className="font-semibold flex items-center gap-2">
-                          <span>💵</span> {getText('amount_paid')}
-                        </Label>
-                        <Input
-                          type="number"
-                          value={amountPaid}
-                          onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
-                          className="mt-2 text-lg"
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <Label className="font-semibold flex items-center gap-2">
-                        <span>🔄</span> {getText('remaining')}
-                      </Label>
-                      <p className="mt-2 text-lg font-bold p-2 rounded-lg bg-gradient-to-r from-orange-100 to-red-100 dark:from-orange-900/30 dark:to-red-900/30 text-orange-600 dark:text-orange-400">
-                        {currency((formData?.buying_price || 0) * quantity - amountPaid)}
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )}
+                  </div>
+                </div>
+              )}
+            </div>
 
             <DialogFooter className="gap-2 pt-4 border-t">
-              {selectedProduct ? (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedProduct(null);
-                      setFormData(null);
-                      setProductSearch('');
-                      setQuantity(1);
-                      setAmountPaid(0);
-                      setSelectedSupplierId('');
-                    }}
-                    className="hover:bg-slate-100 dark:hover:bg-slate-800"
-                  >
-                    ❌ {getText('cancel')}
-                  </Button>
-                  <Button
-                    onClick={handleCreateInvoice}
-                    className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold shadow-lg hover:shadow-xl transition-all"
-                  >
-                    ✅ {getText('create_invoice')}
-                  </Button>
-                </>
-              ) : null}
+              <Button variant="outline" onClick={() => {
+                setAddInvoiceOpen(false);
+                setInvoiceItems([]);
+                setCurrentSelectedProduct(null);
+                setCurrentProductSearch('');
+                setCurrentQuantity(1);
+                setInvoiceAmountPaid(0);
+                setSelectedSupplierId('');
+              }}>
+                ❌ {getText('cancel')}
+              </Button>
+              <Button
+                onClick={handleCreateInvoice}
+                disabled={invoiceItems.length === 0 || !selectedSupplierId}
+                className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold"
+              >
+                ✅ {getText('create_invoice')}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -1095,358 +876,217 @@ export default function PurchaseInvoices() {
           </div>
         </motion.div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <AnimatePresence>
-            {filteredInvoices.map((invoice, index) => (
-              <motion.div
-                key={invoice.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                transition={{ delay: index * 0.05 }}
-                whileHover={{ y: -4 }}
-              >
-                <Card className="hover:shadow-2xl transition-all bg-gradient-to-br from-white to-slate-50 dark:from-slate-800 dark:to-slate-900 border border-slate-200 dark:border-slate-700 overflow-hidden">
-                  {/* Header with Status */}
-                  <CardHeader className="bg-gradient-to-r from-slate-50 via-blue-50 to-cyan-50 dark:from-slate-900 dark:via-blue-900 dark:to-cyan-900 border-b border-slate-200 dark:border-slate-700">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1">
-                        <CardTitle className="text-xl flex items-center gap-2 mb-2">
-                          <span className="text-3xl">🧾</span>
-                          <span className="font-bold text-slate-900 dark:text-white">{invoice.invoice_number}</span>
-                        </CardTitle>
-                        <p className="text-sm text-slate-600 dark:text-slate-400 flex items-center gap-2 font-medium">
-                          <span>🏭</span>
-                          {invoice.supplier_name}
-                        </p>
-                      </div>
-                      <motion.div whileHover={{ scale: 1.1 }}>
-                        <Badge className={`${getStatusColor(invoice.status)} text-sm font-bold px-3 py-1 whitespace-nowrap`}>
-                          {getStatusEmoji(invoice.status)} {getText(`filter_${invoice.status}`)}
-                        </Badge>
-                      </motion.div>
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="pt-5 space-y-4">
-                    {/* Invoice Header Info */}
-                    <div className="grid grid-cols-3 gap-3 pb-4 border-b border-slate-200 dark:border-slate-700">
-                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                        <p className="text-2xl mb-1">📅</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('date')}</p>
-                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{formatDate(invoice.invoice_date)}</p>
-                      </motion.div>
-                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                        <p className="text-2xl mb-1">📅</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('due_date')}</p>
-                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{formatDate(invoice.due_date)}</p>
-                      </motion.div>
-                      <motion.div whileHover={{ scale: 1.05 }} className="text-center p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
-                        <p className="text-2xl mb-1">💳</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400">{getText('payment_method')}</p>
-                        <p className="font-semibold text-slate-900 dark:text-white text-sm">{invoice.payment_method || 'N/A'}</p>
-                      </motion.div>
-                    </div>
-
-                    {/* Products Section */}
-                    {invoice.items && invoice.items.length > 0 && (
-                      <div className="space-y-3">
-                        <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>📦</span> {getText('items')} ({invoice.items.length})
-                        </h3>
-                        <div className="space-y-2">
-                          {invoice.items.map((item, idx) => (
-                            <motion.div
-                              key={item.id}
-                              initial={{ opacity: 0, x: -10 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              transition={{ delay: idx * 0.05 }}
-                              className="p-3 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-700 dark:to-slate-800 rounded-lg border border-slate-200 dark:border-slate-600 hover:shadow-md transition-shadow"
-                            >
-                              <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                  <p className="font-semibold text-slate-900 dark:text-white">{item.product_name}</p>
-                                  <div className="grid grid-cols-2 gap-2 mt-2 text-xs">
-                                    {item.barcode && (
-                                      <p className="text-slate-600 dark:text-slate-400">🔲 {item.barcode}</p>
-                                    )}
-                                    {item.brand && (
-                                      <p className="text-slate-600 dark:text-slate-400">🏷️ {item.brand}</p>
-                                    )}
-                                    {item.category_name && (
-                                      <p className="text-slate-600 dark:text-slate-400">📂 {item.category_name}</p>
-                                    )}
-                                    <p className="text-slate-600 dark:text-slate-400">📊 {item.quantity} × {currency(item.unit_price)}</p>
-                                  </div>
-                                </div>
-                                <span className="font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-2 py-1 rounded text-sm whitespace-nowrap">
-                                  {currency(item.total_price)}
-                                </span>
-                              </div>
-                            </motion.div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Cost Summary Section */}
-                    <div className="bg-gradient-to-br from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-700 p-4 rounded-lg border border-slate-300 dark:border-slate-600 space-y-2">
-                      <div className="border-t border-slate-300 dark:border-slate-600 pt-2 flex justify-between items-center">
-                        <span className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                          <span>💰</span> {getText('total')}
-                        </span>
-                        <span className="font-bold text-lg bg-gradient-to-r from-green-600 to-emerald-600 dark:from-green-500 dark:to-emerald-500 bg-clip-text text-transparent">
-                          {currency(invoice.total_amount)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Payment Status */}
-                    <div className="bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 p-4 rounded-lg border border-cyan-200 dark:border-cyan-800 space-y-2">
-                      <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-3">
-                        <span>💳</span> {getText('payment_summary')}
-                      </h4>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                          <span>✅</span> {getText('amount_paid')}
-                        </span>
-                        <span className="font-bold text-green-600 dark:text-green-400">{currency(invoice.amount_paid || 0)}</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                          <span>🔄</span> {getText('remaining')}
-                        </span>
-                        <span className="font-bold text-orange-600 dark:text-orange-400">{currency((invoice.total_amount || 0) - (invoice.amount_paid || 0))}</span>
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="grid grid-cols-2 gap-3 pt-2">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            size="sm"
-                            onClick={() => setSelectedInvoice(invoice)}
-                            className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold transition-all hover:shadow-md"
-                          >
-                            👁️ {getText('view')}
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="max-w-3xl max-h-[95vh] overflow-y-auto bg-gradient-to-br from-white to-slate-50 dark:from-slate-900 dark:to-slate-800">
-                          <DialogHeader className="bg-gradient-to-r from-blue-600 to-cyan-600 dark:from-blue-500 dark:to-cyan-500 -m-6 mb-6 p-6 rounded-t-lg">
-                            <DialogTitle className="text-2xl text-white flex items-center gap-2">
-                              <span>📋</span> {getText('details')}
-                            </DialogTitle>
-                            <DialogDescription className="text-blue-100">
-                              {language === 'ar'
-                                ? 'عرض تفاصيل شاملة لفاتورة الشراء'
-                                : 'Afficher les détails complets de la facture d\'achat'}
-                            </DialogDescription>
-                          </DialogHeader>
-
-                          {selectedInvoice && (
-                            <motion.div className={`space-y-5 ${isRTL ? 'text-right' : ''}`}
-                              initial={{ opacity: 0, y: 20 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.3 }}
-                            >
-                              {/* Invoice Header Info */}
-                              <div className="grid grid-cols-3 gap-4">
-                                <motion.div whileHover={{ scale: 1.05 }} className="p-4 bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 rounded-lg border border-blue-200 dark:border-blue-700">
-                                  <p className="text-3xl mb-2">🧾</p>
-                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('invoice_number')}</p>
-                                  <p className="font-bold text-slate-900 dark:text-white text-lg">{selectedInvoice.invoice_number}</p>
-                                </motion.div>
-                                <motion.div whileHover={{ scale: 1.05 }} className="p-4 bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 rounded-lg border border-purple-200 dark:border-purple-700">
-                                  <p className="text-3xl mb-2">🏭</p>
-                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('supplier')}</p>
-                                  <p className="font-bold text-slate-900 dark:text-white text-lg">{selectedInvoice.supplier_name}</p>
-                                </motion.div>
-                                <motion.div whileHover={{ scale: 1.05 }} className={`p-4 bg-gradient-to-br ${
-                                  selectedInvoice.status === 'paid' ? 'from-green-50 to-green-100 dark:from-green-900/30 dark:to-green-800/30 border-green-200 dark:border-green-700' :
-                                  selectedInvoice.status === 'pending' ? 'from-yellow-50 to-yellow-100 dark:from-yellow-900/30 dark:to-yellow-800/30 border-yellow-200 dark:border-yellow-700' :
-                                  'from-red-50 to-red-100 dark:from-red-900/30 dark:to-red-800/30 border-red-200 dark:border-red-700'
-                                } rounded-lg border`}>
-                                  <p className="text-3xl mb-2">{getStatusEmoji(selectedInvoice.status)}</p>
-                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('status')}</p>
-                                  <p className="font-bold text-slate-900 dark:text-white text-lg capitalize">{getText(`filter_${selectedInvoice.status}`)}</p>
-                                </motion.div>
-                              </div>
-
-                              {/* Dates and Payment Info */}
-                              <div className="grid grid-cols-2 gap-4">
-                                <motion.div whileHover={{ scale: 1.02 }} className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-700">
-                                  <p className="text-2xl mb-2">📅</p>
-                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('invoice_date')}</p>
-                                  <p className="font-bold text-slate-900 dark:text-white">{formatDate(selectedInvoice.invoice_date)}</p>
-                                </motion.div>
-                                <motion.div whileHover={{ scale: 1.02 }} className="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-300 dark:border-slate-700">
-                                  <p className="text-2xl mb-2">📅</p>
-                                  <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">{getText('due_date')}</p>
-                                  <p className="font-bold text-slate-900 dark:text-white">{formatDate(selectedInvoice.due_date)}</p>
-                                </motion.div>
-                              </div>
-
-                              {/* Products Section */}
-                              {selectedInvoice.items && selectedInvoice.items.length > 0 && (
-                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }} className="border-2 border-slate-300 dark:border-slate-700 rounded-lg p-4">
-                                  <h3 className="font-bold text-lg mb-4 text-slate-900 dark:text-white flex items-center gap-2">
-                                    <span className="text-2xl">📦</span> {getText('items')} ({selectedInvoice.items.length})
-                                  </h3>
-                                  <div className="space-y-3">
-                                    {selectedInvoice.items.map((item, idx) => (
-                                      <motion.div
-                                        key={item.id}
-                                        initial={{ opacity: 0, x: -20 }}
-                                        animate={{ opacity: 1, x: 0 }}
-                                        transition={{ delay: idx * 0.1 }}
-                                        whileHover={{ x: 4 }}
-                                        className="p-4 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-800 dark:to-slate-700 rounded-lg border border-slate-300 dark:border-slate-600 shadow-sm hover:shadow-md transition-shadow"
-                                      >
-                                        <div className="flex justify-between items-start">
-                                          <div className="flex-1">
-                                            <p className="font-bold text-slate-900 dark:text-white text-base">{item.product_name}</p>
-                                            <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
-                                              {item.barcode && (
-                                                <p className="text-slate-600 dark:text-slate-400">🔲 <span className="font-medium">{item.barcode}</span></p>
-                                              )}
-                                              {item.brand && (
-                                                <p className="text-slate-600 dark:text-slate-400">🏷️ <span className="font-medium">{item.brand}</span></p>
-                                              )}
-                                              {item.category_name && (
-                                                <p className="text-slate-600 dark:text-slate-400">📂 <span className="font-medium">{item.category_name}</span></p>
-                                              )}
-                                              <p className="text-slate-600 dark:text-slate-400">📊 {item.quantity} {language === 'ar' ? 'وحدة' : 'unité(s)'}</p>
-                                            </div>
-                                            <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
-                                              💲 {currency(item.unit_price)}/{language === 'ar' ? 'وحدة' : 'unité'}
-                                            </p>
-                                          </div>
-                                          <motion.div whileHover={{ scale: 1.1 }} className="bg-gradient-to-r from-green-500 to-emerald-500 text-white px-3 py-2 rounded-lg font-bold whitespace-nowrap">
-                                            {currency(item.total_price)}
-                                          </motion.div>
-                                        </div>
-                                      </motion.div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-
-                              {/* Cost Summary Section */}
-                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-gradient-to-br from-slate-100 to-slate-50 dark:from-slate-800 dark:to-slate-700 p-5 rounded-lg border-2 border-slate-300 dark:border-slate-600 space-y-3">
-                                <h3 className="font-bold text-lg text-slate-900 dark:text-white flex items-center gap-2 mb-4">
-                                  <span className="text-2xl">💰</span> {getText('payment_summary')}
-                                </h3>
-                                
-                                <div className="space-y-2">
-                                  <div className="border-t-2 border-slate-400 dark:border-slate-500 pt-3 flex justify-between items-center p-2 bg-gradient-to-r from-blue-600 to-blue-500 dark:from-blue-500 dark:to-blue-400 rounded-lg text-white mb-3">
-                                    <span className="font-bold text-base flex items-center gap-2">
-                                      <span>💵</span> {getText('total')}
-                                    </span>
-                                    <span className="font-bold text-xl">{currency(selectedInvoice.total_amount)}</span>
-                                  </div>
-
-                                  <div className="flex justify-between items-center p-2 bg-white dark:bg-slate-900/30 rounded">
-                                    <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
-                                      <span>✅</span> {getText('amount_paid')}
-                                    </span>
-                                    <span className="font-bold text-green-600 dark:text-green-400">{currency(selectedInvoice.amount_paid || 0)}</span>
-                                  </div>
-
-                                  <div className="flex justify-between items-center p-2 bg-white dark:bg-slate-900/30 rounded">
-                                    <span className="text-slate-700 dark:text-slate-300 font-medium flex items-center gap-2">
-                                      <span>🔄</span> {getText('remaining')}
-                                    </span>
-                                    <span className="font-bold text-orange-600 dark:text-orange-400">{currency((selectedInvoice.total_amount || 0) - (selectedInvoice.amount_paid || 0))}</span>
-                                  </div>
-                                </div>
-                              </motion.div>
-
-                              {/* Additional Info */}
-                              {selectedInvoice.notes && (
-                                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }} className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-700">
-                                  <p className="font-bold text-slate-900 dark:text-white flex items-center gap-2 mb-2">
-                                    <span>📝</span> {getText('notes')}
-                                  </p>
-                                  <p className="text-slate-700 dark:text-slate-300 text-sm">{selectedInvoice.notes}</p>
-                                </motion.div>
-                              )}
-
-                              {/* Action Buttons */}
-                              <div className="flex gap-3 pt-4 border-t border-slate-300 dark:border-slate-700">
-                                {selectedInvoice.status !== 'paid' && (
-                                  <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="flex-1">
-                                    <Button
-                                      onClick={() => markAsPaid(selectedInvoice.id)}
-                                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold shadow-lg hover:shadow-xl transition-all"
-                                    >
-                                      ✅ {getText('mark_as_paid')}
-                                    </Button>
-                                  </motion.div>
-                                )}
-                                {selectedInvoice.status === 'paid' && (
-                                  <motion.div whileHover={{ scale: 1.05 }} className="flex-1">
-                                    <div className="w-full p-3 bg-green-100 dark:bg-green-900/30 rounded-lg border-2 border-green-500 text-center font-bold text-green-700 dark:text-green-400">
-                                      ✅ {language === 'ar' ? 'تم الدفع' : 'Payée'}
-                                    </div>
-                                  </motion.div>
-                                )}
-                              </div>
-                            </motion.div>
-                          )}
-                        </DialogContent>
-                      </Dialog>
-
-                      <Dialog open={confirmDelete === invoice.id} onOpenChange={(open) => !open && setConfirmDelete(null)}>
-                        <DialogTrigger asChild>
-                          <Button
-                            size="sm"
-                            onClick={() => setConfirmDelete(invoice.id)}
-                            className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold transition-all hover:shadow-md"
-                          >
-                            🗑️ {getText('delete')}
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader>
-                            <DialogTitle>{getText('confirm_delete')}</DialogTitle>
-                            <DialogDescription>
-                              {language === 'ar'
-                                ? 'هل أنت متأكد من رغبتك في حذف هذه الفاتورة؟'
-                                : 'Êtes-vous sûr de vouloir supprimer cette facture?'}
-                            </DialogDescription>
-                          </DialogHeader>
-                          <DialogFooter>
-                            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
-                              {getText('delete_cancel')}
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              onClick={() => deleteInvoice(invoice.id)}
-                            >
-                              {getText('delete_confirm')}
-                            </Button>
-                          </DialogFooter>
-                        </DialogContent>
-                      </Dialog>
-                    </div>
-
-                    {invoice.status === 'pending' && (
-                      <Button
-                        size="sm"
-                        className="w-full mt-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold transition-all hover:shadow-md"
-                        onClick={() => markAsPaid(invoice.id)}
-                      >
-                        💰 {getText('pay_debt')}
+        <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg">
+          <table className="w-full bg-white dark:bg-slate-900">
+            <thead className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950 dark:to-cyan-950 border-b border-slate-200 dark:border-slate-700">
+              <tr>
+                <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700 dark:text-slate-300">🧾 {getText('invoice_number')}</th>
+                <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700 dark:text-slate-300">🏭 {getText('supplier')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📅 {getText('date')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">💰 {getText('total')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">✅ {getText('amount_paid')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">🔄 {getText('remaining')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">📊 {getText('status')}</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700 dark:text-slate-300">⚙️ Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredInvoices.map((invoice, idx) => (
+                <tr key={invoice.id} className={`border-b border-slate-100 dark:border-slate-800 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors ${idx % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
+                  <td className="px-4 py-3 font-bold text-slate-800 dark:text-slate-200">{invoice.invoice_number}</td>
+                  <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{invoice.supplier_name}</td>
+                  <td className="px-4 py-3 text-center text-sm text-slate-600 dark:text-slate-400">{formatDate(invoice.invoice_date)}</td>
+                  <td className="px-4 py-3 text-center font-bold text-blue-700 dark:text-blue-400">{currency(invoice.total_amount)}</td>
+                  <td className="px-4 py-3 text-center font-semibold text-green-700 dark:text-green-400">{currency(invoice.amount_paid || 0)}</td>
+                  <td className="px-4 py-3 text-center font-semibold text-orange-600 dark:text-orange-400">{currency((invoice.total_amount || 0) - (invoice.amount_paid || 0))}</td>
+                  <td className="px-4 py-3 text-center">
+                    <Badge className={getStatusColor(invoice.status)}>
+                      {getStatusEmoji(invoice.status)} {getText(`filter_${invoice.status}`)}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1 justify-center">
+                      <Button size="sm" variant="outline" className="h-8 px-2 text-blue-600 border-blue-200 hover:bg-blue-50"
+                        onClick={() => { setSelectedInvoice(invoice); setViewDetailsOpen(true); }}>
+                        👁️
                       </Button>
-                    )}
-                  </CardContent>
-                </Card>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                      <Button size="sm" variant="outline" className="h-8 px-2 text-amber-600 border-amber-200 hover:bg-amber-50"
+                        onClick={() => { setEditingInvoice({ ...invoice }); setEditInvoiceOpen(true); }}>
+                        ✏️
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-8 px-2 text-purple-600 border-purple-200 hover:bg-purple-50"
+                        onClick={() => handlePrintInvoice(invoice)}>
+                        🖨️
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-8 px-2 text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => setConfirmDelete(invoice.id)}>
+                        🗑️
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {/* View Details Dialog */}
+      <Dialog open={viewDetailsOpen} onOpenChange={setViewDetailsOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>📋 {getText('details')}</DialogTitle>
+            <DialogDescription>{selectedInvoice?.invoice_number}</DialogDescription>
+          </DialogHeader>
+          {selectedInvoice && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                  <p className="text-xs text-slate-500">{getText('invoice_number')}</p>
+                  <p className="font-bold">{selectedInvoice.invoice_number}</p>
+                </div>
+                <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
+                  <p className="text-xs text-slate-500">{getText('supplier')}</p>
+                  <p className="font-bold">{selectedInvoice.supplier_name}</p>
+                </div>
+                <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <p className="text-xs text-slate-500">{getText('status')}</p>
+                  <Badge className={getStatusColor(selectedInvoice.status)}>{getStatusEmoji(selectedInvoice.status)} {getText(`filter_${selectedInvoice.status}`)}</Badge>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <p className="text-xs text-slate-500">{getText('invoice_date')}</p>
+                  <p className="font-semibold">{formatDate(selectedInvoice.invoice_date)}</p>
+                </div>
+                <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                  <p className="text-xs text-slate-500">{getText('due_date')}</p>
+                  <p className="font-semibold">{formatDate(selectedInvoice.due_date)}</p>
+                </div>
+              </div>
+              {selectedInvoice.items && selectedInvoice.items.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100 dark:bg-slate-800">
+                      <tr>
+                        <th className="px-3 py-2 text-left">{getText('product')}</th>
+                        <th className="px-3 py-2 text-center">{getText('quantity')}</th>
+                        <th className="px-3 py-2 text-center">{getText('price')}</th>
+                        <th className="px-3 py-2 text-center">{getText('total')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedInvoice.items.map((item) => (
+                        <tr key={item.id} className="border-t border-slate-100 dark:border-slate-800">
+                          <td className="px-3 py-2 font-medium">{item.product_name}</td>
+                          <td className="px-3 py-2 text-center">{item.quantity}</td>
+                          <td className="px-3 py-2 text-center">{currency(item.unit_price)}</td>
+                          <td className="px-3 py-2 text-center font-bold text-blue-700 dark:text-blue-400">{currency(item.total_price)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-lg space-y-2">
+                <div className="flex justify-between font-bold text-lg">
+                  <span>💰 {getText('total')}</span>
+                  <span className="text-blue-700 dark:text-blue-400">{currency(selectedInvoice.total_amount)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>✅ {getText('amount_paid')}</span>
+                  <span className="text-green-700 dark:text-green-400 font-semibold">{currency(selectedInvoice.amount_paid || 0)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>🔄 {getText('remaining')}</span>
+                  <span className="text-orange-600 dark:text-orange-400 font-semibold">{currency((selectedInvoice.total_amount || 0) - (selectedInvoice.amount_paid || 0))}</span>
+                </div>
+              </div>
+              {selectedInvoice.notes && (
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-700">
+                  <p className="text-xs text-slate-500 mb-1">📝 {getText('notes')}</p>
+                  <p className="text-sm">{selectedInvoice.notes}</p>
+                </div>
+              )}
+              <DialogFooter>
+                {selectedInvoice.status !== 'paid' && (
+                  <Button onClick={() => { markAsPaid(selectedInvoice.id); setViewDetailsOpen(false); }}
+                    className="bg-green-600 hover:bg-green-700 text-white">
+                    ✅ {getText('mark_as_paid')}
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => handlePrintInvoice(selectedInvoice)}>🖨️ {language === 'ar' ? 'طباعة' : 'Imprimer'}</Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Invoice Dialog */}
+      <Dialog open={editInvoiceOpen} onOpenChange={setEditInvoiceOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>✏️ {language === 'ar' ? 'تعديل الفاتورة' : 'Modifier la Facture'}</DialogTitle>
+            <DialogDescription>{editingInvoice?.invoice_number}</DialogDescription>
+          </DialogHeader>
+          {editingInvoice && (
+            <div className="space-y-4">
+              <div>
+                <Label>{getText('status')}</Label>
+                <Select value={editingInvoice.status} onValueChange={(v) => setEditingInvoice({ ...editingInvoice, status: v as PurchaseInvoice['status'] })}>
+                  <SelectTrigger className="mt-2"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">{getText('filter_pending')}</SelectItem>
+                    <SelectItem value="paid">{getText('filter_paid')}</SelectItem>
+                    <SelectItem value="overdue">{getText('filter_overdue')}</SelectItem>
+                    <SelectItem value="cancelled">{getText('filter_cancelled')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>{getText('amount_paid')}</Label>
+                <Input type="number" className="mt-2" value={editingInvoice.amount_paid || 0}
+                  onChange={(e) => setEditingInvoice({ ...editingInvoice, amount_paid: parseFloat(e.target.value) || 0 })} />
+              </div>
+              <div>
+                <Label>{getText('payment_method')}</Label>
+                <Input className="mt-2" value={editingInvoice.payment_method || ''}
+                  onChange={(e) => setEditingInvoice({ ...editingInvoice, payment_method: e.target.value })} />
+              </div>
+              <div>
+                <Label>{getText('due_date')}</Label>
+                <Input type="date" className="mt-2" value={editingInvoice.due_date?.split('T')[0] || ''}
+                  onChange={(e) => setEditingInvoice({ ...editingInvoice, due_date: e.target.value })} />
+              </div>
+              <div>
+                <Label>{getText('notes')}</Label>
+                <Input className="mt-2" value={editingInvoice.notes || ''}
+                  onChange={(e) => setEditingInvoice({ ...editingInvoice, notes: e.target.value })} />
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditInvoiceOpen(false)}>{getText('cancel')}</Button>
+                <Button onClick={handleEditInvoice} className="bg-blue-600 hover:bg-blue-700 text-white">
+                  💾 {getText('save')}
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Delete Dialog */}
+      <Dialog open={!!confirmDelete} onOpenChange={(open) => !open && setConfirmDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>🗑️ {getText('confirm_delete')}</DialogTitle>
+            <DialogDescription>{getText('delete_warning')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDelete(null)}>{getText('delete_cancel')}</Button>
+            <Button variant="destructive" onClick={() => confirmDelete && deleteInvoice(confirmDelete)}>{getText('delete_confirm')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

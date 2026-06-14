@@ -607,6 +607,27 @@ export const createPurchaseInvoice = async (
   return invoice;
 };
 
+// ========== WORKER PERMISSIONS ==========
+
+export const getWorkerPermissions = async (employeeId: string): Promise<Record<string, boolean>> => {
+  const { data, error } = await supabase
+    .from('worker_permissions')
+    .select('permissions')
+    .eq('employee_id', employeeId)
+    .single();
+
+  if (error || !data) return {};
+  return data.permissions || {};
+};
+
+export const saveWorkerPermissions = async (employeeId: string, permissions: Record<string, boolean>): Promise<void> => {
+  const { error } = await supabase
+    .from('worker_permissions')
+    .upsert({ employee_id: employeeId, permissions }, { onConflict: 'employee_id' });
+
+  if (error) throw error;
+};
+
 // ========== DASHBOARD STATS ==========
 
 export const getDashboardStats = async () => {

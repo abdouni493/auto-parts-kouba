@@ -639,6 +639,35 @@ export default function Sales() {
   const [invoiceToDeleteId, setInvoiceToDeleteId] = useState<number | null>(null);
   const [isDeleteConfirmationOpen, setIsDeleteConfirmationOpen] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [viewDetailsInvoice, setViewDetailsInvoice] = useState<InvoiceDetails | null>(null);
+  const [isViewDetailsOpen, setIsViewDetailsOpen] = useState(false);
+
+  const handleViewDetails = async (invoiceId: number) => {
+    try {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select(`*, invoice_items(product_name, quantity, unit_price, total_price)`)
+        .eq('id', invoiceId)
+        .single();
+      if (error) throw error;
+      setViewDetailsInvoice({
+        id: data.id,
+        clientId: data.client_name || 'Client',
+        total: data.total_amount || 0,
+        amount_paid: data.amount_paid || 0,
+        created_at: data.invoice_date || data.created_at,
+        items: (data.invoice_items || []).map((item: any) => ({
+          product_name: item.product_name,
+          quantity: item.quantity,
+          selling_price: item.unit_price,
+          total: item.total_price,
+        })),
+      });
+      setIsViewDetailsOpen(true);
+    } catch (err) {
+      console.error('Error fetching invoice details:', err);
+    }
+  };
 
   // Fetch sales data from Supabase
   const fetchSalesData = async () => {
@@ -1146,9 +1175,9 @@ export default function Sales() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => handleOpenEditModal(invoice)}
+                              onClick={() => handleViewDetails(invoice.id)}
                               className="hover:bg-purple-50 dark:hover:bg-purple-900/20"
-                              title={language === 'ar' ? 'عرض' : 'Voir'}
+                              title={language === 'ar' ? 'تفاصيل' : 'Détails'}
                             >
                               👁️
                             </Button>
@@ -1201,6 +1230,64 @@ export default function Sales() {
         onClose={() => setIsImportDialogOpen(false)}
         onImport={handleImportSales}
       />
+
+      {/* View Details Dialog */}
+      <Dialog open={isViewDetailsOpen} onOpenChange={setIsViewDetailsOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>📋 {language === 'ar' ? 'تفاصيل الفاتورة' : 'Détails de la Facture'} #{viewDetailsInvoice?.id}</DialogTitle>
+            <DialogDescription>
+              {viewDetailsInvoice?.clientId} • {viewDetailsInvoice?.created_at ? formatDate(viewDetailsInvoice.created_at, language) : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {viewDetailsInvoice && (
+            <div className="space-y-4">
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100 dark:bg-slate-800">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">{language === 'ar' ? 'المنتج' : 'Produit'}</th>
+                      <th className="px-3 py-2 text-center font-semibold">{language === 'ar' ? 'الكمية' : 'Qté'}</th>
+                      <th className="px-3 py-2 text-center font-semibold">{language === 'ar' ? 'السعر' : 'Prix'}</th>
+                      <th className="px-3 py-2 text-center font-semibold">{language === 'ar' ? 'المجموع' : 'Total'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {viewDetailsInvoice.items.map((item, idx) => (
+                      <tr key={idx} className="border-t border-slate-100 dark:border-slate-800">
+                        <td className="px-3 py-2 font-medium">{item.product_name}</td>
+                        <td className="px-3 py-2 text-center">{item.quantity}</td>
+                        <td className="px-3 py-2 text-center">{formatCurrencyLocal(item.selling_price, language)}</td>
+                        <td className="px-3 py-2 text-center font-bold text-blue-700 dark:text-blue-400">{formatCurrencyLocal(item.total, language)}</td>
+                      </tr>
+                    ))}
+                    {viewDetailsInvoice.items.length === 0 && (
+                      <tr><td colSpan={4} className="text-center py-6 text-slate-400">📭 {language === 'ar' ? 'لا توجد منتجات' : 'Aucun article'}</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between font-bold text-lg">
+                  <span>💰 {language === 'ar' ? 'المجموع' : 'Total'}</span>
+                  <span className="text-blue-700 dark:text-blue-400">{formatCurrencyLocal(viewDetailsInvoice.total, language)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>✅ {language === 'ar' ? 'المدفوع' : 'Payé'}</span>
+                  <span className="text-green-600 font-semibold">{formatCurrencyLocal(viewDetailsInvoice.amount_paid, language)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>🔄 {language === 'ar' ? 'الباقي' : 'Reste'}</span>
+                  <span className="text-orange-600 font-semibold">{formatCurrencyLocal(viewDetailsInvoice.total - viewDetailsInvoice.amount_paid, language)}</span>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsViewDetailsOpen(false)}>{language === 'ar' ? 'إغلاق' : 'Fermer'}</Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

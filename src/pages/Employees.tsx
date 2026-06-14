@@ -55,7 +55,8 @@ import {
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth, getStores, createEmployeeAuthUser, getEmployeeStores, updateEmployeeStores } from '@/lib/supabaseClient';
+import { getEmployees, createEmployee, updateEmployee, deleteEmployee, createPayment, getPaymentHistory, deletePayment, getTotalPayments, getPaymentsThisMonth, getStores, createEmployeeAuthUser, getEmployeeStores, updateEmployeeStores, getWorkerPermissions, saveWorkerPermissions } from '@/lib/supabaseClient';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 
 interface Employee {
@@ -139,6 +140,41 @@ export default function Employees() {
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false);
   const [totalPayments, setTotalPayments] = useState(0);
   const [paymentsThisMonth, setPaymentsThisMonth] = useState(0);
+
+  const [permissionsDialogOpen, setPermissionsDialogOpen] = useState(false);
+  const [permissionsEmployee, setPermissionsEmployee] = useState<Employee | null>(null);
+  const [permissions, setPermissions] = useState<Record<string, boolean>>({
+    create_sale: true,
+    edit_sale: false,
+    delete_sale: false,
+    view_inventory: true,
+    create_purchase: false,
+  });
+
+  const handleOpenPermissions = async (employee: Employee) => {
+    setPermissionsEmployee(employee);
+    const existing = await getWorkerPermissions(String(employee.id));
+    setPermissions({
+      create_sale: true,
+      edit_sale: false,
+      delete_sale: false,
+      view_inventory: true,
+      create_purchase: false,
+      ...existing,
+    });
+    setPermissionsDialogOpen(true);
+  };
+
+  const handleSavePermissions = async () => {
+    if (!permissionsEmployee) return;
+    try {
+      await saveWorkerPermissions(String(permissionsEmployee.id), permissions);
+      toast({ title: '✅ ' + (language === 'ar' ? 'تم حفظ الصلاحيات' : 'Permissions sauvegardées') });
+      setPermissionsDialogOpen(false);
+    } catch (err) {
+      toast({ title: language === 'ar' ? 'خطأ' : 'Erreur', variant: 'destructive' });
+    }
+  };
 
   const fetchEmployees = async () => {
     setIsLoading(true);
@@ -751,7 +787,7 @@ export default function Employees() {
 
                   {/* Card Actions Footer */}
                   <div className="px-6 py-4 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 border-t-2 border-purple-100 dark:border-purple-800">
-                    <div className="grid grid-cols-4 gap-2">
+                    <div className="grid grid-cols-5 gap-2">
                       {/* View History Button */}
                       <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
                         <Button
@@ -785,6 +821,18 @@ export default function Employees() {
                         >
                           <span className="text-lg">✏️</span>
                           <span className="text-xs font-bold">{language === 'ar' ? 'تعديل' : 'Éditer'}</span>
+                        </Button>
+                      </motion.div>
+
+                      {/* Permissions Button */}
+                      <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                        <Button
+                          onClick={() => handleOpenPermissions(employee)}
+                          className="w-full h-12 rounded-lg bg-gradient-to-r from-purple-500 to-violet-500 hover:from-purple-600 hover:to-violet-600 text-white font-bold shadow-lg flex flex-col items-center justify-center gap-0.5 transition-all"
+                          title={language === 'ar' ? 'الصلاحيات' : 'Permissions'}
+                        >
+                          <span className="text-lg">🔐</span>
+                          <span className="text-xs font-bold">{language === 'ar' ? 'صلاحيات' : 'Perms'}</span>
                         </Button>
                       </motion.div>
 
@@ -1309,12 +1357,45 @@ export default function Employees() {
           </div>
 
           <DialogFooter className="mt-6 pt-6 border-t-2 border-purple-200 dark:border-purple-800">
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setIsHistoryDialogOpen(false)}
               className="rounded-lg px-6 font-bold"
             >
               ✖️ {language === 'ar' ? 'إغلاق' : 'Fermer'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Permissions Dialog */}
+      <Dialog open={permissionsDialogOpen} onOpenChange={setPermissionsDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>🔐 {language === 'ar' ? 'صلاحيات الموظف' : 'Permissions Employé'}</DialogTitle>
+            <DialogDescription>{permissionsEmployee?.full_name}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {[
+              { key: 'create_sale', labelFr: 'Créer une vente', labelAr: 'إنشاء بيع' },
+              { key: 'edit_sale', labelFr: 'Modifier une vente', labelAr: 'تعديل بيع' },
+              { key: 'delete_sale', labelFr: 'Supprimer une vente', labelAr: 'حذف بيع' },
+              { key: 'view_inventory', labelFr: 'Voir l\'inventaire', labelAr: 'عرض المخزون' },
+              { key: 'create_purchase', labelFr: 'Créer achat', labelAr: 'إنشاء شراء' },
+            ].map(({ key, labelFr, labelAr }) => (
+              <div key={key} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                <Label className="cursor-pointer font-medium">{language === 'ar' ? labelAr : labelFr}</Label>
+                <Switch
+                  checked={!!permissions[key]}
+                  onCheckedChange={(checked) => setPermissions(prev => ({ ...prev, [key]: checked }))}
+                />
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPermissionsDialogOpen(false)}>{language === 'ar' ? 'إلغاء' : 'Annuler'}</Button>
+            <Button onClick={handleSavePermissions} className="bg-purple-600 hover:bg-purple-700 text-white">
+              💾 {language === 'ar' ? 'حفظ' : 'Sauvegarder'}
             </Button>
           </DialogFooter>
         </DialogContent>

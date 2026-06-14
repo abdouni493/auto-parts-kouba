@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabaseClient';
+import { useWorkerPermissions } from '@/hooks/useWorkerPermissions';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -16,6 +18,7 @@ export default function WorkerSidebar({ isOpen }: SidebarProps) {
   const [storeName, setStoreName] = useState('Auto Parts');
   const [storeDisplayName, setStoreDisplayName] = useState('Auto Parts');
   const [storeLogoData, setStoreLogoData] = useState('');
+  const [employeeId, setEmployeeId] = useState<string | null>(null);
 
   useEffect(() => {
     const localStoreName = localStorage.getItem('storeName');
@@ -27,13 +30,22 @@ export default function WorkerSidebar({ isOpen }: SidebarProps) {
     if (localLogoData) setStoreLogoData(localLogoData);
   }, []);
 
+  useEffect(() => {
+    if (!user?.id) return;
+    supabase.from('employees').select('id').eq('user_id', user.id).single()
+      .then(({ data }) => { if (data?.id) setEmployeeId(String(data.id)); });
+  }, [user?.id]);
+
+  const { can } = useWorkerPermissions(employeeId);
+
   const navigationItems = [
     { title: t('nav.dashboard'), href: '/employee', emoji: '📊' },
     { title: 'Mes Ventes', href: '/employee/sales', emoji: '💳' },
+    ...(can('view_inventory') ? [{ title: 'Inventaire', href: '/employee/inventory', emoji: '📦' }] : []),
   ];
 
   const toolItems = [
-    { title: t('nav.pos'), href: '/employee/pos', emoji: '🧮' },
+    ...(can('create_sale') ? [{ title: t('nav.pos'), href: '/employee/pos', emoji: '🧮' }] : []),
     { title: t('nav.settings'), href: '/employee/workersettings', emoji: '⚙️' }
   ];
 

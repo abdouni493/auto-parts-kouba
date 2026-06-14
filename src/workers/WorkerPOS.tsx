@@ -372,10 +372,24 @@ export default function WorkerPOS() {
         ? (amountPaid > 0 ? 'partial' : 'pending')
         : (amountPaid >= finalTotal ? 'paid' : 'partial');
 
+      const { data: lastSaleInv } = await supabase
+        .from('invoices')
+        .select('invoice_number')
+        .eq('type', 'sale')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      let nextSaleNum = 1;
+      if (lastSaleInv?.invoice_number) {
+        const n = parseInt(lastSaleInv.invoice_number.replace(/\D/g, ''), 10);
+        if (!isNaN(n)) nextSaleNum = n + 1;
+      }
+      const newInvoiceNumber = `VTE-${String(nextSaleNum).padStart(6, '0')}`;
+
       const invoiceRes = await supabase
         .from('invoices')
         .insert({
-          invoice_number: `WRK-${Date.now()}`,
+          invoice_number: newInvoiceNumber,
           type: 'sale',
           client_name: clientName || 'Client Anonyme',
           status: invoiceStatus,
@@ -458,18 +472,20 @@ export default function WorkerPOS() {
               <div className="mt-3 space-y-2">
                 {assignedStores.length > 1 ? (
                   <div className="flex items-center gap-2 flex-wrap">
-                    <Lock className="h-5 w-5 text-gray-600 dark:text-gray-300" />
-                    <select
-                      value={workerStoreId}
-                      onChange={(e) => handleSwitchStore(e.target.value)}
-                      className="px-4 py-2 rounded-lg border border-blue-300 dark:border-blue-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white font-bold text-blue-600 dark:text-cyan-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {assignedStores.map((store) => (
-                        <option key={store.store_id} value={store.store_id}>
-                          {store.name} {store.is_primary ? '⭐' : ''}
-                        </option>
-                      ))}
-                    </select>
+                    <span className="text-sm text-gray-600 dark:text-gray-300 font-medium">🏪 Magasin:</span>
+                    {assignedStores.map((store) => (
+                      <button
+                        key={store.store_id}
+                        onClick={() => handleSwitchStore(store.store_id)}
+                        className={`px-4 py-1.5 rounded-full text-sm font-bold transition-all border-2 ${
+                          workerStoreId === store.store_id
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-md'
+                            : 'bg-white dark:bg-slate-800 text-blue-600 dark:text-cyan-400 border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-slate-700'
+                        }`}
+                      >
+                        {store.name}{store.is_primary ? ' ⭐' : ''}
+                      </button>
+                    ))}
                   </div>
                 ) : (
                   <p className="text-lg text-gray-600 dark:text-gray-300 flex items-center gap-2">
@@ -517,91 +533,48 @@ export default function WorkerPOS() {
               />
             </div>
 
-            {/* Products Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[600px] overflow-y-auto custom-scrollbar">
-              <AnimatePresence>
-                {filteredProducts.length > 0 ? (
-                  filteredProducts.map((product) => {
-                    return (
-                      <motion.div
-                        key={product.id}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.9 }}
-                        whileHover={{ y: -4 }}
-                        className="rounded-xl border border-white/20 dark:border-white/10 bg-gradient-to-br from-white to-slate-50 dark:from-slate-800 dark:to-slate-900 shadow-md hover:shadow-xl transition-all cursor-pointer group overflow-hidden"
-                      >
-                        {/* Product Card */}
-                        <div className="space-y-3 p-4">
-                          {/* Header with emoji */}
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <h3 className="font-bold text-sm text-gray-900 dark:text-white line-clamp-2">
-                                📦 {product.name}
-                              </h3>
-                            </div>
-                          </div>
-
-                          {/* Description */}
-                          {product.description && (
-                            <p className="text-xs text-gray-600 dark:text-gray-300 line-clamp-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded">
-                              📝 {product.description}
-                            </p>
-                          )}
-
-                          {/* Shelf and Line Info */}
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-gradient-to-br from-blue-100 to-cyan-100 dark:from-blue-900/30 dark:to-cyan-900/30 rounded p-2">
-                              <p className="text-blue-700 dark:text-blue-300 font-semibold">📦 Étagère</p>
-                              <p className="text-gray-700 dark:text-gray-300 font-mono font-bold">
-                                {product.shelving_location || 'N/A'}
-                              </p>
-                            </div>
-                            <div className="bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 rounded p-2">
-                              <p className="text-purple-700 dark:text-purple-300 font-semibold">📍 Ligne</p>
-                              <p className="text-gray-700 dark:text-gray-300 font-mono font-bold">
-                                {product.shelving_line || 'N/A'}
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Price and Stock */}
-                          <div className="flex items-center justify-between bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20 p-2 rounded-lg">
-                            <div>
-                              <p className="text-xs text-gray-600 dark:text-gray-400">💰 Prix</p>
-                              <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">
-                                {formatCurrency(product.selling_price)}
-                              </p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-xs text-gray-600 dark:text-gray-400">📦 Stock</p>
-                              <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
-                                {product.current_quantity}
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Add to Cart Button */}
-                          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                            <Button
-                              onClick={() => addToCart(product)}
-                              disabled={product.current_quantity === 0}
-                              className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold disabled:opacity-50"
-                            >
-                              <Plus className="h-4 w-4 mr-2" />
-                              Ajouter au panier
-                            </Button>
-                          </motion.div>
-                        </div>
-                      </motion.div>
-                    );
-                  })
-                ) : (
-                  <div className="col-span-2 text-center py-12 text-gray-500">
-                    📭 Aucun produit trouvé
-                  </div>
-                )}
-              </AnimatePresence>
+            {/* Products Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 max-h-[600px] overflow-y-auto">
+              <table className="w-full bg-white dark:bg-slate-900 text-sm">
+                <thead className="sticky top-0 bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950 dark:to-cyan-950 border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="px-3 py-3 text-left font-semibold text-slate-700 dark:text-slate-300">📦 Produit</th>
+                    <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">📚 Étagère</th>
+                    <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">💰 Prix</th>
+                    <th className="px-3 py-3 text-center font-semibold text-slate-700 dark:text-slate-300">📊 Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredProducts.length > 0 ? filteredProducts.map((product, idx) => (
+                    <tr key={product.id}
+                      onClick={() => product.current_quantity > 0 && addToCart(product)}
+                      className={`border-b border-slate-100 dark:border-slate-800 transition-colors cursor-pointer
+                        ${product.current_quantity === 0 ? 'opacity-40 cursor-not-allowed' : 'hover:bg-blue-50 dark:hover:bg-blue-950/40'}
+                        ${idx % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50 dark:bg-slate-800/50'}`}
+                    >
+                      <td className="px-3 py-3">
+                        <p className="font-semibold text-slate-800 dark:text-slate-200">{product.name}</p>
+                        {product.brand && <p className="text-xs text-slate-500">{product.brand}</p>}
+                      </td>
+                      <td className="px-3 py-3 text-center text-slate-600 dark:text-slate-400 font-mono text-xs">
+                        {product.shelving_location || '—'}{product.shelving_line ? ` / L${product.shelving_line}` : ''}
+                      </td>
+                      <td className="px-3 py-3 text-center font-bold text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(product.selling_price)}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <span className={`font-bold px-2 py-1 rounded-full text-xs ${product.current_quantity === 0 ? 'bg-red-100 text-red-700' : product.current_quantity <= product.min_quantity ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                          {product.current_quantity}
+                        </span>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={4} className="text-center py-12 text-gray-500">📭 Aucun produit trouvé</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </motion.div>
 

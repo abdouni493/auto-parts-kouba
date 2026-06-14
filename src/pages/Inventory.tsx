@@ -253,6 +253,7 @@ export default function Inventory() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('all');
   const [filterStock, setFilterStock] = useState('all');
+  const [filterStore, setFilterStore] = useState('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<string | null>(null);
@@ -326,13 +327,14 @@ export default function Inventory() {
       (p.barcode && p.barcode.toLowerCase().includes(searchTerm.toLowerCase()));
 
     const matchesCategory = filterCategory === 'all' || !filterCategory || p.category_id === filterCategory;
+    const matchesStore = filterStore === 'all' || !filterStore || p.store_id === filterStore;
 
     let matchesStock = true;
     const status = getStockStatus(p.current_quantity, p.min_quantity);
     if (filterStock === 'low') matchesStock = status === 'low';
     if (filterStock === 'out') matchesStock = status === 'out';
 
-    return matchesSearch && matchesCategory && matchesStock;
+    return matchesSearch && matchesCategory && matchesStore && matchesStock;
   });
 
   // ================= RENDER =================
@@ -358,7 +360,7 @@ export default function Inventory() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="mb-6 grid grid-cols-1 md:grid-cols-5 gap-4"
+        className="mb-6 grid grid-cols-1 md:grid-cols-6 gap-4"
       >
         <div className="relative">
           <Search className="absolute left-3 top-3 text-slate-400 w-5 h-5" />
@@ -392,6 +394,20 @@ export default function Inventory() {
             <SelectItem value="all">{getText('filter_all', language)}</SelectItem>
             <SelectItem value="low">{getText('filter_low', language)}</SelectItem>
             <SelectItem value="out">{getText('filter_out', language)}</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={filterStore} onValueChange={setFilterStore}>
+          <SelectTrigger className="h-11 rounded-xl border-slate-200">
+            <SelectValue placeholder={language === 'ar' ? 'المتجر' : 'Magasin'} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{getText('filter_all', language)}</SelectItem>
+            {stores.map((store) => (
+              <SelectItem key={store.id} value={store.id}>
+                {store.name}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
 

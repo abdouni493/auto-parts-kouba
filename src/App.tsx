@@ -22,6 +22,7 @@ import { LanguageProvider } from "./contexts/LanguageContext";
 import NotFound from "./pages/NotFound";
 import { CommandPalette, useCommandPalette } from "./components/CommandPalette";
 import WorkerSettings from "@/workers/WorkerSettings";
+import WorkerInventory from "@/workers/WorkerInventory";
 
 // ✅ import worker layout + worker dashboard + worker POS + worker sales
 import WorkerDashboard from "@/workers/WorkerDashboard";
@@ -116,6 +117,7 @@ const AppContent = () => {
           <Route index element={<WorkerDashboard />} />
           <Route path="pos" element={<WorkerPOS />} />
           <Route path="sales" element={<WorkerSales />} />
+          <Route path="inventory" element={<WorkerInventory />} />
           <Route path="workersettings" element={<WorkerSettings />} />
         </Route>
 
