@@ -195,30 +195,77 @@ export default function Settings() {
   const handleBackup = async () => {
     toast({
       title: "Sauvegarde en cours...",
-      description: "Création de la sauvegarde de la base de données",
+      description: "Récupération des données depuis la base de données...",
     });
+
     try {
-      const response = await axios.get(`${API_URL}/backup/export`, {
-        responseType: 'blob', // Important for file download
-      });
-      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const tables = [
+        'products', 'suppliers', 'categories', 'stores',
+        'invoices', 'invoice_items', 'employees', 'shelvings',
+        'worker_permissions', 'payments'
+      ];
+
+      const escapeSQL = (val: any): string => {
+        if (val === null || val === undefined) return 'NULL';
+        if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+        if (typeof val === 'number') return String(val);
+        return `'${String(val).replace(/'/g, "''")}'`;
+      };
+
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      const sqlLines: string[] = [
+        `-- AutoParts Database Backup`,
+        `-- Generated: ${now.toISOString()}`,
+        `-- Version: 1.0`,
+        ``,
+      ];
+
+      for (const table of tables) {
+        const { data, error } = await supabase.from(table as any).select('*');
+        if (error) {
+          sqlLines.push(`-- Table: ${table} (ERREUR: ${error.message})`);
+          sqlLines.push('');
+          continue;
+        }
+        if (!data || data.length === 0) {
+          sqlLines.push(`-- Table: ${table} (aucune donnée)`);
+          sqlLines.push('');
+          continue;
+        }
+
+        sqlLines.push(`-- Table: ${table} (${data.length} enregistrements)`);
+        const columns = Object.keys(data[0]);
+        for (const row of data) {
+          const values = columns.map(col => escapeSQL((row as any)[col]));
+          sqlLines.push(
+            `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${values.join(', ')});`
+          );
+        }
+        sqlLines.push('');
+      }
+
+      const sqlContent = sqlLines.join('\n');
+      const blob = new Blob([sqlContent], { type: 'text/sql' });
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'database-backup.sqlite');
+      link.setAttribute('download', `backup-${dateStr}.sql`);
       document.body.appendChild(link);
       link.click();
-      link.parentNode.removeChild(link);
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
 
       const newBackup = {
-        date: new Date().toLocaleString(),
-        size: 'N/A', // Size will be determined on the server or manually
+        date: now.toLocaleString(),
+        size: `${(sqlContent.length / 1024).toFixed(1)} KB`,
         status: 'success'
       };
       setBackupHistory(prev => [newBackup, ...prev]);
 
       toast({
         title: "Sauvegarde terminée",
-        description: "Base de données sauvegardée avec succès",
+        description: `Fichier backup-${dateStr}.sql téléchargé avec succès`,
       });
     } catch (err) {
       console.error("Backup failed:", err);
@@ -230,39 +277,13 @@ export default function Settings() {
     }
   };
 
-  const handleRestore = async (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append('backup', file);
-
+  const handleRestore = async (event: React.ChangeEvent<HTMLInputElement>) => {
     toast({
-      title: "Restauration en cours...",
-      description: "Restauration de la base de données",
+      title: "Restauration non disponible",
+      description: "La restauration manuelle n'est pas supportée via cette interface. Veuillez contacter l'administrateur Supabase pour restaurer les données.",
+      variant: "destructive"
     });
-
-    try {
-      await axios.post(`${API_URL}/backup/import`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      toast({
-        title: "Restauration réussie",
-        description: "Base de données restaurée. Redémarrez le serveur pour appliquer les changements.",
-      });
-    } catch (err) {
-      console.error("Restore failed:", err);
-      toast({
-        title: "Erreur de restauration",
-        description: "Échec de la restauration de la base de données.",
-        variant: "destructive"
-      });
-    }
+    if (event.target) event.target.value = '';
   };
 
   const handleAccountUpdate = async () => {
@@ -402,11 +423,10 @@ export default function Settings() {
     }
 
     try {
-      // Assuming a user ID of 1 for the admin user
-      await axios.put(`${API_URL}/users/1`, {
-        currentPassword: settings.currentPassword,
-        newPassword: settings.newPassword,
+      const { error } = await supabase.auth.updateUser({
+        password: settings.newPassword
       });
+      if (error) throw error;
       toast({
         title: "Mot de passe modifié",
         description: "Votre mot de passe a été mis à jour avec succès",
@@ -419,10 +439,9 @@ export default function Settings() {
       }));
     } catch (err) {
       console.error("Password change failed:", err);
-      const errorMessage = err.response?.data?.message || "Échec de la modification du mot de passe.";
       toast({
         title: "Erreur",
-        description: errorMessage,
+        description: "Échec de la modification du mot de passe.",
         variant: "destructive"
       });
     }
