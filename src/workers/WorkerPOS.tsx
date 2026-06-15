@@ -564,8 +564,8 @@ export default function WorkerPOS() {
                         ${idx % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50 dark:bg-slate-800/50'}`}
                     >
                       <td className="px-3 py-3">
-                        <p className="font-semibold text-slate-800 dark:text-slate-200">{product.name}</p>
-                        {product.brand && <p className="text-xs text-slate-500">{product.brand}</p>}
+                        <p className="font-semibold text-slate-800 dark:text-slate-200 break-words whitespace-normal">{product.name}</p>
+                        {product.brand && <p className="text-xs text-slate-500 break-words">{product.brand}</p>}
                       </td>
                       <td className="px-3 py-3 text-slate-600 dark:text-slate-400 font-mono text-xs">
                         {product.barcode || '—'}

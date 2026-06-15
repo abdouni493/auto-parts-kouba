@@ -670,9 +670,9 @@ export default function POS() {
                                   }`}
                                   onClick={() => addToCart(product)}
                                 >
-                                  <td className="px-4 py-3 font-semibold text-slate-800 dark:text-white max-w-xs">
+                                  <td className="px-4 py-3 font-semibold text-slate-800 dark:text-white">
                                     <div className="flex flex-col">
-                                      <span className="truncate">{product.name}</span>
+                                      <span className="break-words whitespace-normal">{product.name}</span>
                                       {product.barcode && (
                                         <span className="text-xs text-slate-500 dark:text-slate-400">📍 {product.barcode}</span>
                                       )}

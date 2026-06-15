@@ -466,20 +466,19 @@ export default function Inventory() {
                   // Filter formData to only include valid database fields
                   const validProductData = {
                     name: formData.name,
-                    barcode: formData.barcode,
-                    brand: formData.brand,
-                    description: formData.description,
-                    category_id: formData.category_id,
-                    supplier_id: formData.supplier_id,
-                    buying_price: formData.buying_price,
-                    selling_price: formData.selling_price,
-                    last_price_to_sell: formData.last_price_to_sell,
-                    margin_percent: formData.margin_percent,
-                    initial_quantity: formData.initial_quantity,
-                    current_quantity: formData.current_quantity,
-                    min_quantity: formData.min_quantity,
+                    barcode: formData.barcode || null,
+                    brand: formData.brand || null,
+                    description: formData.description || null,
+                    category_id: formData.category_id || null,
+                    supplier_id: formData.supplier_id || null,
+                    buying_price: formData.buying_price || 0,
+                    selling_price: formData.selling_price || 0,
+                    last_price_to_sell: formData.last_price_to_sell || null,
+                    margin_percent: formData.margin_percent || 0,
+                    initial_quantity: formData.initial_quantity || 0,
+                    current_quantity: formData.current_quantity || 0,
+                    min_quantity: formData.min_quantity || 0,
                     store_id: formData.store_id || null,
-                    amount_paid: formData.amount_paid || 0,
                     shelving_location: formData.shelving_location || null,
                     shelving_line: formData.shelving_line || null,
                   };
@@ -520,7 +519,7 @@ export default function Inventory() {
                     email: '',
                     phone: '',
                   });
-                  setSuppliers([...suppliers, result.data[0]]);
+                  setSuppliers([...suppliers, result]);
                 } catch (err) {
                   console.error('Error adding supplier:', err);
                 }
@@ -629,9 +628,9 @@ export default function Inventory() {
                         idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'
                       }`}
                     >
-                      <td className="px-4 py-3 font-semibold text-slate-800 max-w-xs truncate">
+                      <td className="px-4 py-3 font-semibold text-slate-800">
                         <div className="flex flex-col">
-                          <span>{product.name}</span>
+                          <span className="break-words whitespace-normal">{product.name}</span>
                           {product.barcode && (
                             <span className="text-xs text-slate-500">🔲 {product.barcode}</span>
                           )}
@@ -735,7 +734,7 @@ export default function Inventory() {
                     <CardHeader className="pb-3 bg-gradient-to-r from-blue-50 to-emerald-50">
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1">
-                          <CardTitle className="text-lg text-slate-800 truncate">
+                          <CardTitle className="text-lg text-slate-800 break-words whitespace-normal">
                             {product.name}
                           </CardTitle>
                           {product.barcode && (
