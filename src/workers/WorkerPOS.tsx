@@ -308,7 +308,7 @@ export default function WorkerPOS() {
     if (existingItem) {
       if (existingItem.quantity < product.current_quantity) {
         existingItem.quantity += 1;
-        existingItem.total = existingItem.quantity * product.selling_price - existingItem.discount;
+        existingItem.total = existingItem.quantity * product.selling_price * (1 - existingItem.discount / 100);
         setCart([...cart]);
       } else {
         toast({
@@ -340,18 +340,29 @@ export default function WorkerPOS() {
       const maxQty = item.product.current_quantity;
       if (newQuantity > 0 && newQuantity <= maxQty) {
         item.quantity = newQuantity;
-        item.total = newQuantity * item.product.selling_price - item.discount;
+        item.total = newQuantity * item.product.selling_price * (1 - item.discount / 100);
         setCart([...cart]);
       }
     }
   };
 
+  const updateDiscount = (productId: string, discount: number) => {
+    const item = cart.find((i) => i.product.id === productId);
+    if (item) {
+      item.discount = discount;
+      item.total = item.quantity * item.product.selling_price * (1 - discount / 100);
+      setCart([...cart]);
+    }
+  };
+
   // --- Calculations ---
-  const totalAmount = cart.reduce((sum, item) => sum + item.total, 0);
-  const finalDiscount = globalDiscount.type === 'percentage'
-    ? totalAmount * (globalDiscount.amount / 100)
-    : globalDiscount.amount;
-  const finalTotal = Math.max(0, totalAmount - finalDiscount);
+  const subtotal = cart.reduce((sum, item) => sum + item.quantity * item.product.selling_price, 0);
+  const totalDiscount = cart.reduce((sum, item) => sum + (item.product.selling_price * item.quantity * item.discount / 100), 0);
+  const totalAmount = subtotal - totalDiscount;
+  const globalDiscountAmount = globalDiscount.type === 'fixed' 
+    ? globalDiscount.amount 
+    : (subtotal - totalDiscount) * (globalDiscount.amount / 100);
+  const finalTotal = Math.max(0, subtotal - totalDiscount - globalDiscountAmount);
   const change = receivedAmount - finalTotal;
 
   // --- Handle Payment ---
@@ -629,49 +640,56 @@ export default function WorkerPOS() {
                         className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800"
                       >
                         <div className="flex justify-between items-start mb-2">
-                          <p className="font-semibold text-sm text-gray-900 dark:text-white">
-                            {item.product.name}
-                          </p>
+                          <div className="flex-1">
+                            <p className="font-semibold text-sm text-gray-900 dark:text-white">
+                              {item.product.name}
+                            </p>
+                            {item.product.brand && (
+                              <p className="text-xs text-slate-500 dark:text-slate-400">🏷️ {item.product.brand}</p>
+                            )}
+                          </div>
                           <button
                             onClick={() => removeFromCart(item.product.id)}
                             className="text-red-500 hover:text-red-700"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <X className="h-4 w-4" />
                           </button>
                         </div>
 
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm text-gray-600 dark:text-gray-300">
-                            {formatCurrency(item.product.selling_price)} x {item.quantity}
-                          </span>
-                          <span className="font-bold text-blue-600">
-                            {formatCurrency(item.total)}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 w-6 p-0"
+                              onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </Button>
+                            <span className="text-sm font-bold w-6 text-center">{item.quantity}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 w-6 p-0"
+                              onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(item.total)}</span>
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0"
-                            onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                          >
-                            <Minus className="h-3 w-3" />
-                          </Button>
-                          <input
+                          <Input
                             type="number"
-                            value={item.quantity}
-                            onChange={(e) => updateQuantity(item.product.id, parseInt(e.target.value) || 0)}
-                            className="w-12 text-center text-sm border border-gray-300 rounded px-1"
+                            placeholder="Remise %"
+                            value={item.discount}
+                            onChange={(e) => updateDiscount(item.product.id, Number(e.target.value))}
+                            className="h-6 text-xs border-orange-200 dark:border-orange-700"
+                            min="0"
+                            max="100"
                           />
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0"
-                            onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
+                          <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">%</span>
                         </div>
                       </motion.div>
                     ))
@@ -686,21 +704,61 @@ export default function WorkerPOS() {
 
               {/* Totals */}
               {cart.length > 0 && (
-                <div className="border-t border-blue-200 dark:border-blue-800 pt-4 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span>Sous-total:</span>
-                    <span className="font-semibold">{formatCurrency(totalAmount)}</span>
+                <div className="border-t border-blue-200 dark:border-blue-800 pt-4 space-y-4">
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="font-semibold">📊 {language === 'ar' ? 'المجموع' : 'Sous-total'}:</span>
+                      <span className="font-bold">{formatCurrency(subtotal)}</span>
+                    </div>
+                    
+                    {totalDiscount > 0 && (
+                      <div className="flex justify-between text-yellow-600 dark:text-yellow-400">
+                        <span>🏷️ {language === 'ar' ? 'خصم' : 'Remise'}:</span>
+                        <span>-{formatCurrency(totalDiscount)}</span>
+                      </div>
+                    )}
+                    
+                    <div className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-lg p-3 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{language === 'ar' ? '💵 تخفيض إضافي' : '💵 Réduction'}:</span>
+                        <select 
+                          value={globalDiscount.type}
+                          onChange={(e) => setGlobalDiscount({
+                            ...globalDiscount, 
+                            type: e.target.value as 'fixed' | 'percentage'
+                          })}
+                          className="bg-white dark:bg-slate-700 border border-blue-200 dark:border-blue-700 rounded px-2 py-1 text-xs text-gray-700 dark:text-gray-300 font-semibold"
+                        >
+                          <option value="fixed">DA</option>
+                          <option value="percentage">%</option>
+                        </select>
+                      </div>
+                      <Input
+                        type="number"
+                        placeholder={globalDiscount.type === 'fixed' ? 'DA' : '%'}
+                        value={globalDiscount.amount}
+                        onChange={(e) => setGlobalDiscount({
+                          ...globalDiscount,
+                          amount: Math.max(0, Number(e.target.value))
+                        })}
+                        className="h-8 text-sm bg-white dark:bg-slate-700 border-blue-200 dark:border-blue-700 text-gray-700 dark:text-gray-300"
+                        min="0"
+                      />
+                    </div>
+                    
+                    <div className="border-t border-blue-200 dark:border-blue-800 pt-3" />
+                    <div className="flex justify-between text-lg font-bold">
+                      <span>💰 {language === 'ar' ? 'الإجمالي' : 'Total'}:</span>
+                      <span className="text-blue-600 dark:text-blue-400">{formatCurrency(finalTotal)}</span>
+                    </div>
                   </div>
-                  {finalDiscount > 0 && (
-                    <div className="flex justify-between text-sm text-green-600">
-                      <span>Remise:</span>
-                      <span>-{formatCurrency(finalDiscount)}</span>
+
+                  {globalDiscountAmount > 0 && (
+                    <div className="flex justify-between text-sm text-green-600 dark:text-green-400">
+                      <span>🎯 {language === 'ar' ? 'تخفيض إضافي' : 'Réduction supplémentaire'}:</span>
+                      <span>-{formatCurrency(globalDiscountAmount)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between text-lg font-bold bg-gradient-to-r from-blue-100 to-cyan-100 dark:from-blue-900/30 dark:to-cyan-900/30 p-3 rounded-lg">
-                    <span>Total:</span>
-                    <span className="text-blue-600">{formatCurrency(finalTotal)}</span>
-                  </div>
 
                   {/* Payment Button */}
                   <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
@@ -709,7 +767,7 @@ export default function WorkerPOS() {
                       className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold h-12 rounded-lg"
                     >
                       <CreditCard className="h-5 w-5 mr-2" />
-                      Passer au paiement
+                      {language === 'ar' ? 'إتمام الدفع' : 'Passer au paiement'}
                     </Button>
                   </motion.div>
                 </div>
