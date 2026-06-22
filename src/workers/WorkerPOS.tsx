@@ -40,6 +40,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -133,6 +134,7 @@ export default function WorkerPOS() {
     amount: 0,
     type: 'fixed'
   });
+  const [discountEnabled, setDiscountEnabled] = useState(true);
   const [workerStoreId, setWorkerStoreId] = useState<string>('');
   const [workerStoreName, setWorkerStoreName] = useState<string>('');
   const [assignedStores, setAssignedStores] = useState<Store[]>([]);
@@ -352,6 +354,22 @@ export default function WorkerPOS() {
       item.discount = discount;
       item.total = item.quantity * item.product.selling_price * (1 - discount / 100);
       setCart([...cart]);
+    }
+  };
+
+  // Activate / deactivate the reduction feature. When turned off, all
+  // per-item and global discounts are cleared so totals reflect full price.
+  const toggleDiscount = (enabled: boolean) => {
+    setDiscountEnabled(enabled);
+    if (!enabled) {
+      setCart((prev) =>
+        prev.map((item) => ({
+          ...item,
+          discount: 0,
+          total: item.quantity * item.product.selling_price,
+        }))
+      );
+      setGlobalDiscount({ amount: 0, type: 'fixed' });
     }
   };
 
@@ -679,18 +697,20 @@ export default function WorkerPOS() {
                           <span className="font-bold text-green-600 dark:text-green-400">{formatCurrency(item.total)}</span>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            placeholder="Remise %"
-                            value={item.discount}
-                            onChange={(e) => updateDiscount(item.product.id, Number(e.target.value))}
-                            className="h-6 text-xs border-orange-200 dark:border-orange-700"
-                            min="0"
-                            max="100"
-                          />
-                          <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">%</span>
-                        </div>
+                        {discountEnabled && (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              placeholder="Remise %"
+                              value={item.discount}
+                              onChange={(e) => updateDiscount(item.product.id, Number(e.target.value))}
+                              className="h-6 text-xs border-orange-200 dark:border-orange-700"
+                              min="0"
+                              max="100"
+                            />
+                            <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">%</span>
+                          </div>
+                        )}
                       </motion.div>
                     ))
                   ) : (
@@ -710,42 +730,55 @@ export default function WorkerPOS() {
                       <span className="font-semibold">📊 {language === 'ar' ? 'المجموع' : 'Sous-total'}:</span>
                       <span className="font-bold">{formatCurrency(subtotal)}</span>
                     </div>
-                    
-                    {totalDiscount > 0 && (
+
+                    {/* Reduction activation / deactivation toggle */}
+                    <div className="flex items-center justify-between bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-lg px-3 py-2">
+                      <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                        {language === 'ar' ? '🎯 تفعيل التخفيض' : '🎯 Activer la réduction'}
+                      </span>
+                      <Switch
+                        checked={discountEnabled}
+                        onCheckedChange={toggleDiscount}
+                      />
+                    </div>
+
+                    {discountEnabled && totalDiscount > 0 && (
                       <div className="flex justify-between text-yellow-600 dark:text-yellow-400">
                         <span>🏷️ {language === 'ar' ? 'خصم' : 'Remise'}:</span>
                         <span>-{formatCurrency(totalDiscount)}</span>
                       </div>
                     )}
-                    
-                    <div className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-lg p-3 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{language === 'ar' ? '💵 تخفيض إضافي' : '💵 Réduction'}:</span>
-                        <select 
-                          value={globalDiscount.type}
+
+                    {discountEnabled && (
+                      <div className="bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 rounded-lg p-3 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{language === 'ar' ? '💵 تخفيض إضافي' : '💵 Réduction'}:</span>
+                          <select
+                            value={globalDiscount.type}
+                            onChange={(e) => setGlobalDiscount({
+                              ...globalDiscount,
+                              type: e.target.value as 'fixed' | 'percentage'
+                            })}
+                            className="bg-white dark:bg-slate-700 border border-blue-200 dark:border-blue-700 rounded px-2 py-1 text-xs text-gray-700 dark:text-gray-300 font-semibold"
+                          >
+                            <option value="fixed">DA</option>
+                            <option value="percentage">%</option>
+                          </select>
+                        </div>
+                        <Input
+                          type="number"
+                          placeholder={globalDiscount.type === 'fixed' ? 'DA' : '%'}
+                          value={globalDiscount.amount}
                           onChange={(e) => setGlobalDiscount({
-                            ...globalDiscount, 
-                            type: e.target.value as 'fixed' | 'percentage'
+                            ...globalDiscount,
+                            amount: Math.max(0, Number(e.target.value))
                           })}
-                          className="bg-white dark:bg-slate-700 border border-blue-200 dark:border-blue-700 rounded px-2 py-1 text-xs text-gray-700 dark:text-gray-300 font-semibold"
-                        >
-                          <option value="fixed">DA</option>
-                          <option value="percentage">%</option>
-                        </select>
+                          className="h-8 text-sm bg-white dark:bg-slate-700 border-blue-200 dark:border-blue-700 text-gray-700 dark:text-gray-300"
+                          min="0"
+                        />
                       </div>
-                      <Input
-                        type="number"
-                        placeholder={globalDiscount.type === 'fixed' ? 'DA' : '%'}
-                        value={globalDiscount.amount}
-                        onChange={(e) => setGlobalDiscount({
-                          ...globalDiscount,
-                          amount: Math.max(0, Number(e.target.value))
-                        })}
-                        className="h-8 text-sm bg-white dark:bg-slate-700 border-blue-200 dark:border-blue-700 text-gray-700 dark:text-gray-300"
-                        min="0"
-                      />
-                    </div>
-                    
+                    )}
+
                     <div className="border-t border-blue-200 dark:border-blue-800 pt-3" />
                     <div className="flex justify-between text-lg font-bold">
                       <span>💰 {language === 'ar' ? 'الإجمالي' : 'Total'}:</span>
