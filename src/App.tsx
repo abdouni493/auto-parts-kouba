@@ -115,6 +115,8 @@ const AppContent = () => {
           }
         >
           <Route index element={<WorkerDashboard />} />
+          {/* Login redirects workers to /employee/dashboard */}
+          <Route path="dashboard" element={<WorkerDashboard />} />
           <Route path="pos" element={<WorkerPOS />} />
           <Route path="sales" element={<WorkerSales />} />
           <Route path="inventory" element={<WorkerInventory />} />

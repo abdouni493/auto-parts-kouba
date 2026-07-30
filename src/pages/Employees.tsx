@@ -335,7 +335,8 @@ export default function Employees() {
     setIsHistoryDialogOpen(true);
   };
 
-  const handleDeleteEmployee = async (id: number) => {
+  // Employee ids are uuids (strings) in Supabase.
+  const handleDeleteEmployee = async (id: string | number) => {
     if (window.confirm(language === 'ar' ? 'هل أنت متأكد من أنك تريد حذف هذا الموظف؟' : 'Are you sure you want to delete this employee?')) {
       try {
         await deleteEmployee(String(id));
@@ -386,7 +387,12 @@ export default function Employees() {
         if (formData.password && formData.email) {
           try {
             console.log('🔐 Creating auth user for worker...');
-            const authResult = await createEmployeeAuthUser(formData.email, formData.password, formData.username || formData.email.split('@')[0]);
+            const authResult = await createEmployeeAuthUser(
+              formData.email,
+              formData.password,
+              formData.username || formData.email.split('@')[0],
+              formData.full_name
+            );
             authUserId = authResult.authUser?.id;
             
             // IMPORTANT: Store credentials in localStorage for testing (remove in production)

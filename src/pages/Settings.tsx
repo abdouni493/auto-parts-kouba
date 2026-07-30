@@ -55,7 +55,10 @@ export default function Settings() {
     confirm: false
   });
 
-  const [backupHistory, setBackupHistory] = useState([]);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreProgress, setRestoreProgress] = useState({ message: '', percent: 0 });
+
+  const [backupHistory, setBackupHistory] = useState<any[]>([]);
   const [systemInfo, setSystemInfo] = useState({
     version: '1.0.0',
     database: 'local',
@@ -278,12 +281,334 @@ export default function Settings() {
   };
 
   const handleRestore = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    toast({
-      title: "Restauration non disponible",
-      description: "La restauration manuelle n'est pas supportée via cette interface. Veuillez contacter l'administrateur Supabase pour restaurer les données.",
-      variant: "destructive"
-    });
-    if (event.target) event.target.value = '';
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsRestoring(true);
+    setRestoreProgress({ message: 'Lecture du fichier de sauvegarde...', percent: 5 });
+
+    try {
+      // ── 1. Check auth state ──
+      const { data: authData } = await supabase.auth.getSession();
+      console.log('🔐 [RESTORE] Auth session:', authData.session ? `User ${authData.session.user.id} (${authData.session.user.email})` : 'NO SESSION');
+      
+      if (!authData.session) {
+        throw new Error("Vous devez être connecté pour restaurer les données. Veuillez vous reconnecter.");
+      }
+
+      const fileText = await file.text();
+      setRestoreProgress({ message: 'Analyse des données...', percent: 15 });
+
+      let dataByTable: Record<string, Record<string, any>[]> = {};
+
+      if (file.name.endsWith('.json') || fileText.trim().startsWith('{')) {
+        dataByTable = parseJSONBackup(fileText);
+      }
+      if (Object.keys(dataByTable).length === 0) {
+        dataByTable = parseSQLBackup(fileText);
+      }
+
+      const tableNames = Object.keys(dataByTable);
+      if (tableNames.length === 0) {
+        throw new Error("Le fichier téléversé ne contient aucune instruction d'insertion ou donnée valide.");
+      }
+
+      // ── 2. Log parsed data summary ──
+      console.log('📊 [RESTORE] Parsed data summary:');
+      for (const [table, rows] of Object.entries(dataByTable)) {
+        console.log(`  - ${table}: ${rows.length} rows, columns: ${rows.length > 0 ? Object.keys(rows[0]).join(', ') : '(empty)'}`);
+      }
+
+      const TABLE_RESTORE_ORDER = [
+        'stores', 'categories', 'suppliers', 'customers', 'shelvings',
+        'products', 'employees', 'employee_stores', 'worker_permissions',
+        'payments', 'invoices', 'invoice_items', 'users'
+      ];
+
+      const orderedTables = [
+        ...TABLE_RESTORE_ORDER.filter(t => tableNames.includes(t)),
+        ...tableNames.filter(t => !TABLE_RESTORE_ORDER.includes(t))
+      ];
+
+      // ── 3. Auto-discover actual DB columns for each table ──
+      setRestoreProgress({ message: 'Vérification du schéma de la base de données...', percent: 18 });
+      const dbColumnsByTable: Record<string, string[]> = {};
+      const failedTables = new Set<string>();
+
+      for (const tableName of orderedTables) {
+        try {
+          const { data: probeData, error: probeErr } = await supabase
+            .from(tableName)
+            .select('*')
+            .limit(1);
+
+          if (probeErr) {
+            console.warn(`⚠️ [RESTORE] Cannot probe table '${tableName}': ${probeErr.message}`);
+            // Try an empty insert to discover columns from the error
+            failedTables.add(tableName);
+            continue;
+          }
+
+          if (probeData && probeData.length > 0) {
+            dbColumnsByTable[tableName] = Object.keys(probeData[0]);
+          } else {
+            // Table is empty, try inserting a minimal row to discover columns
+            // Use the columns from the backup data but filter via test upsert
+            const backupCols = Object.keys(dataByTable[tableName]?.[0] || {});
+            dbColumnsByTable[tableName] = backupCols; // Will be refined during upsert
+          }
+          console.log(`📋 [RESTORE] Table '${tableName}' DB columns: ${dbColumnsByTable[tableName]?.join(', ') || '(unknown)'}`);
+        } catch (e) {
+          console.warn(`⚠️ [RESTORE] Probe failed for '${tableName}'`);
+          failedTables.add(tableName);
+        }
+      }
+
+      // ── 4. Filter backup data to only include columns that exist in DB ──
+      for (const tableName of orderedTables) {
+        if (failedTables.has(tableName)) continue;
+        const dbCols = dbColumnsByTable[tableName];
+        if (!dbCols || dbCols.length === 0) continue;
+
+        const backupRows = dataByTable[tableName];
+        if (!backupRows || backupRows.length === 0) continue;
+
+        const backupCols = Object.keys(backupRows[0]);
+        const extraCols = backupCols.filter(c => !dbCols.includes(c));
+        const missingCols = dbCols.filter(c => !backupCols.includes(c));
+
+        if (extraCols.length > 0) {
+          console.log(`🔧 [RESTORE] Table '${tableName}': Stripping ${extraCols.length} columns not in DB: ${extraCols.join(', ')}`);
+          dataByTable[tableName] = backupRows.map(row => {
+            const filtered: Record<string, any> = {};
+            for (const col of backupCols) {
+              if (!extraCols.includes(col)) {
+                filtered[col] = row[col];
+              }
+            }
+            return filtered;
+          });
+        }
+        if (missingCols.length > 0) {
+          console.log(`ℹ️ [RESTORE] Table '${tableName}': DB has ${missingCols.length} extra columns not in backup: ${missingCols.join(', ')}`);
+        }
+      }
+
+      let totalRows = 0;
+      orderedTables.forEach(t => { totalRows += (dataByTable[t]?.length || 0); });
+
+      let restoredRows = 0;
+      let errorCount = 0;
+      const errorDetails: string[] = [];
+      const succeededTables = new Set<string>();
+
+      // ── 5. Clear existing data (reverse FK order: children first) ──
+      setRestoreProgress({ message: 'Nettoyage des données existantes...', percent: 20 });
+      const reversedTables = [...orderedTables].reverse();
+      for (const tableName of reversedTables) {
+        if (failedTables.has(tableName)) continue;
+        try {
+          // Delete all rows — neq filter on id with impossible value triggers full delete
+          const { error: delErr } = await supabase.from(tableName).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          if (delErr) {
+            console.warn(`⚠️ [RESTORE] Could not clear '${tableName}': ${delErr.message}`);
+          } else {
+            console.log(`🗑️ [RESTORE] Cleared table '${tableName}'`);
+          }
+        } catch (e) {
+          console.warn(`⚠️ [RESTORE] Error clearing '${tableName}'`);
+        }
+      }
+
+      // ── 6. Restore each table ──
+      for (let tIndex = 0; tIndex < orderedTables.length; tIndex++) {
+        const tableName = orderedTables[tIndex];
+        const rows = dataByTable[tableName];
+        if (!rows || rows.length === 0) continue;
+        if (failedTables.has(tableName)) {
+          console.warn(`⏭️ [RESTORE] Skipping '${tableName}' (probe failed)`);
+          errorCount += rows.length;
+          continue;
+        }
+
+        console.log(`\n🔄 [RESTORE] Starting table '${tableName}' (${rows.length} rows)...`);
+
+        // Iterative test upsert — strip bad columns and null FKs in a loop
+        let testPassed = false;
+        for (let attempt = 0; attempt < 15; attempt++) {
+          const currentRows = dataByTable[tableName];
+          const testRow = { ...currentRows[0] };
+          if ('created_by' in testRow) testRow.created_by = null;
+          if (tableName === 'employees' && 'user_id' in testRow) testRow.user_id = null;
+
+          const { error: testErr } = await supabase
+            .from(tableName)
+            .upsert([testRow], { onConflict: 'id' })
+            .select('id');
+
+          if (!testErr) {
+            console.log(`✅ [RESTORE] Test upsert passed for '${tableName}' (attempt ${attempt + 1})`);
+            testPassed = true;
+            break;
+          }
+
+          console.warn(`⚠️ [RESTORE] Test attempt ${attempt + 1} failed for '${tableName}': ${testErr.message} (code: ${testErr.code})`);
+
+          if (testErr.code === 'PGRST204') {
+            // Column doesn't exist — strip it
+            const colMatch = testErr.message.match(/Could not find the '(\w+)' column/);
+            if (colMatch) {
+              const badCol = colMatch[1];
+              console.log(`🔧 [RESTORE] Stripping missing column '${badCol}' from '${tableName}'`);
+              dataByTable[tableName] = currentRows.map(row => {
+                const filtered = { ...row };
+                delete filtered[badCol];
+                return filtered;
+              });
+              continue; // Try again
+            }
+          } else if (testErr.code === '23503') {
+            // FK violation — null out the FK column
+            const fkMatch = testErr.message.match(/foreign key constraint "(\w+)_(\w+)_fkey"/);
+            if (fkMatch) {
+              const fkCol = fkMatch[2];
+              console.log(`🔧 [RESTORE] Nulling FK column '${fkCol}' in '${tableName}'`);
+              dataByTable[tableName] = currentRows.map(row => ({ ...row, [fkCol]: null }));
+              continue; // Try again
+            }
+          }
+
+          // Unknown/unrecoverable error
+          errorDetails.push(`Table '${tableName}': ${testErr.message}`);
+          errorCount += currentRows.length;
+          break;
+        }
+
+        if (!testPassed) {
+          console.error(`❌ [RESTORE] Giving up on table '${tableName}' after iterative fixes`);
+          continue;
+        }
+
+        // Deduplicate rows by unique constraints before inserting
+        let finalRows = dataByTable[tableName].map(row => {
+          const cleaned = { ...row };
+          if ('created_by' in cleaned) cleaned.created_by = null;
+          if (tableName === 'employees' && 'user_id' in cleaned) cleaned.user_id = null;
+          return cleaned;
+        });
+
+        // Deduplicate by 'id' (keep last)
+        const seenIds = new Map<string, number>();
+        finalRows.forEach((row, idx) => { if (row.id) seenIds.set(row.id, idx); });
+        if (seenIds.size < finalRows.length) {
+          const uniqueIndices = new Set(seenIds.values());
+          const before = finalRows.length;
+          finalRows = finalRows.filter((_, idx) => uniqueIndices.has(idx));
+          console.log(`🔧 [RESTORE] '${tableName}': Deduplicated by id: ${before} → ${finalRows.length}`);
+        }
+
+        // For products, also deduplicate by barcode (keep last occurrence)
+        if (tableName === 'products') {
+          const seenBarcodes = new Map<string, number>();
+          finalRows.forEach((row, idx) => {
+            const bc = row.barcode;
+            if (bc !== null && bc !== undefined && bc !== '') {
+              seenBarcodes.set(String(bc), idx);
+            }
+          });
+          const uniqueBcIndices = new Set(seenBarcodes.values());
+          // Include rows with null/empty barcode + unique barcode rows
+          const deduped = finalRows.filter((row, idx) => {
+            const bc = row.barcode;
+            if (bc === null || bc === undefined || bc === '') return true;
+            return uniqueBcIndices.has(idx);
+          });
+          if (deduped.length < finalRows.length) {
+            console.log(`🔧 [RESTORE] '${tableName}': Deduplicated by barcode: ${finalRows.length} → ${deduped.length}`);
+            finalRows = deduped;
+          }
+        }
+
+        // Batch inserts (tables were cleared, so use insert)
+        const chunkSize = 50;
+        let tableErrors = 0;
+
+        for (let i = 0; i < finalRows.length; i += chunkSize) {
+          const chunk = finalRows.slice(i, i + chunkSize);
+
+          const percent = Math.min(95, Math.round(22 + (restoredRows / (totalRows || 1)) * 73));
+          setRestoreProgress({
+            message: `Restauration de '${tableName}' (${Math.min(i + chunkSize, finalRows.length)}/${finalRows.length})...`,
+            percent
+          });
+
+          const { data: chunkData, error: chunkErr } = await supabase
+            .from(tableName)
+            .insert(chunk)
+            .select('id');
+
+          if (chunkErr) {
+            console.warn(`⚠️ [RESTORE] Batch error in '${tableName}': ${chunkErr.message}, trying row-by-row...`);
+            for (const row of chunk) {
+              const { error: rowErr } = await supabase.from(tableName).upsert([row], { onConflict: 'id' }).select('id');
+              if (rowErr) {
+                // Last resort: try insert ignoring this row
+                tableErrors++;
+                errorCount++;
+              } else {
+                restoredRows++;
+              }
+            }
+          } else {
+            restoredRows += chunk.length;
+          }
+        }
+
+        // Verify
+        const { count } = await supabase.from(tableName).select('*', { count: 'exact', head: true });
+        console.log(`✅ [RESTORE] Table '${tableName}' done: ${finalRows.length - tableErrors} restored, DB has ${count ?? '?'} total rows.`);
+        if (tableErrors === 0) succeededTables.add(tableName);
+      }
+
+      setRestoreProgress({ message: 'Restauration terminée !', percent: 100 });
+
+      if (errorDetails.length > 0) {
+        console.error('📋 [RESTORE] Error summary:', errorDetails);
+      }
+
+      const newBackupRecord = {
+        date: new Date().toLocaleString(),
+        size: `${(file.size / 1024).toFixed(1)} KB`,
+        status: errorCount === 0 ? 'success' : 'partial'
+      };
+      setBackupHistory(prev => [newBackupRecord, ...prev]);
+
+      if (errorCount > 0 && errorDetails.length > 0) {
+        toast({
+          title: "Restauration partielle",
+          description: `${restoredRows} restaurés, ${errorCount} erreurs. Vérifiez la console (F12).`,
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Restauration terminée",
+          description: `${restoredRows} enregistrements restaurés à travers ${succeededTables.size} tables.`,
+        });
+      }
+
+      await fetchStoreSettings();
+
+    } catch (err: any) {
+      console.error("❌ [RESTORE] Fatal error:", err);
+      toast({
+        title: "Erreur de restauration",
+        description: err.message || "Une erreur est survenue lors de la restauration.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsRestoring(false);
+      if (event.target) event.target.value = '';
+    }
   };
 
   const handleAccountUpdate = async () => {
@@ -471,7 +796,7 @@ export default function Settings() {
           className="mb-8"
         >
           <h1 className="text-4xl font-bold text-slate-800 mb-2">
-            ⚙️ {t('settings_title', language)}
+            ⚙️ {t('settings_title')}
           </h1>
           <p className="text-slate-600">
             {language === 'ar'
@@ -489,20 +814,53 @@ export default function Settings() {
           <Button
             variant="outline"
             onClick={handleBackup}
+            disabled={isRestoring}
             className="h-11 bg-white hover:bg-blue-50 border-blue-200 hover:border-blue-300 text-blue-700 rounded-xl shadow-sm hover:shadow-md transition-all"
           >
             💾 {language === 'ar' ? 'نسخ احتياطي' : 'Sauvegarde'}
           </Button>
           <Button
             variant="outline"
+            disabled={isRestoring}
             className="h-11 bg-white hover:bg-emerald-50 border-emerald-200 hover:border-emerald-300 text-emerald-700 rounded-xl shadow-sm hover:shadow-md transition-all"
           >
             <label htmlFor="file-upload" className="cursor-pointer flex items-center">
               📁 {language === 'ar' ? 'استعادة' : 'Restaurer'}
             </label>
-            <Input id="file-upload" type="file" className="hidden" onChange={handleRestore} />
+            <Input
+              id="file-upload"
+              type="file"
+              className="hidden"
+              onChange={handleRestore}
+              accept=".sql,.json,.sqlite,.db,.backup"
+              disabled={isRestoring}
+            />
           </Button>
         </motion.div>
+
+        {isRestoring && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full bg-amber-50 border-2 border-amber-300 rounded-xl p-4 mb-6 shadow-sm"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5 text-amber-600 animate-spin" />
+                <span className="font-semibold text-amber-900">
+                  {restoreProgress.message}
+                </span>
+              </div>
+              <span className="font-bold text-amber-700">{restoreProgress.percent}%</span>
+            </div>
+            <div className="w-full bg-amber-200 rounded-full h-3 overflow-hidden">
+              <div
+                className="bg-amber-600 h-full transition-all duration-300 rounded-full"
+                style={{ width: `${restoreProgress.percent}%` }}
+              />
+            </div>
+          </motion.div>
+        )}
 
         {fetchError && (
           <motion.div
@@ -718,7 +1076,6 @@ export default function Settings() {
                       🏬 {language === 'ar' ? 'المتجر النشط' : 'Magasin actif'}
                     </Label>
                     <Select
-                      id="storeSelect"
                       value={storeSettings.id || undefined}
                       onValueChange={(value) => {
                         const selectedStore = stores.find(store => store.id === value);
@@ -732,7 +1089,7 @@ export default function Settings() {
                         }
                       }}
                     >
-                      <SelectTrigger className="h-12 bg-white border-slate-200 rounded-xl hover:border-indigo-300 focus:border-indigo-500 transition-colors">
+                      <SelectTrigger id="storeSelect" className="h-12 bg-white border-slate-200 rounded-xl hover:border-indigo-300 focus:border-indigo-500 transition-colors">
                         <SelectValue placeholder={language === 'ar' ? 'اختر متجر' : 'Sélectionner un magasin'} />
                       </SelectTrigger>
                       <SelectContent className="rounded-xl">
@@ -1000,6 +1357,7 @@ export default function Settings() {
                         </p>
                         <Button
                           variant="outline"
+                          disabled={isRestoring}
                           className="h-12 bg-white hover:bg-amber-50 border-amber-200 hover:border-amber-300 text-amber-700 rounded-xl shadow-sm hover:shadow-md transition-all font-semibold w-full"
                           onClick={() => document.getElementById('file-upload-restore')?.click()}
                         >
@@ -1010,7 +1368,8 @@ export default function Settings() {
                           type="file"
                           className="hidden"
                           onChange={handleRestore}
-                          accept=".sqlite,.db,.backup"
+                          accept=".sql,.json,.sqlite,.db,.backup"
+                          disabled={isRestoring}
                         />
                       </CardContent>
                     </Card>
@@ -1212,3 +1571,272 @@ export default function Settings() {
   </div>
 );
 }
+
+const parseJSONBackup = (jsonText: string): Record<string, Record<string, any>[]> => {
+  try {
+    const parsed = JSON.parse(jsonText);
+    const result: Record<string, Record<string, any>[]> = {};
+    if (typeof parsed === 'object' && parsed !== null) {
+      for (const key of Object.keys(parsed)) {
+        if (Array.isArray(parsed[key])) {
+          result[key.toLowerCase()] = parsed[key];
+        }
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+};
+
+const castSQLValue = (str: string): any => {
+  if (str === '' || str.toUpperCase() === 'NULL') {
+    return null;
+  }
+  if (str.toUpperCase() === 'TRUE') {
+    return true;
+  }
+  if (str.toUpperCase() === 'FALSE') {
+    return false;
+  }
+  if (!isNaN(Number(str)) && !str.startsWith('0x') && str.trim() !== '') {
+    return Number(str);
+  }
+  return str;
+};
+
+const parseSQLTupleValues = (tupleStr: string): any[] => {
+  const values: any[] = [];
+  let currentVal = '';
+  let inString = false;
+  let i = 0;
+
+  while (i < tupleStr.length) {
+    const char = tupleStr[i];
+
+    if (inString) {
+      if (char === "'") {
+        if (i + 1 < tupleStr.length && tupleStr[i + 1] === "'") {
+          currentVal += "'";
+          i += 2;
+          continue;
+        } else {
+          inString = false;
+          i++;
+          continue;
+        }
+      } else {
+        currentVal += char;
+        i++;
+        continue;
+      }
+    } else {
+      if (char === "'") {
+        inString = true;
+        i++;
+        continue;
+      } else if (char === ',') {
+        values.push(castSQLValue(currentVal.trim()));
+        currentVal = '';
+        i++;
+        continue;
+      } else {
+        currentVal += char;
+        i++;
+        continue;
+      }
+    }
+  }
+
+  if (currentVal.trim() !== '' || tupleStr.trim().endsWith(',')) {
+    values.push(castSQLValue(currentVal.trim()));
+  }
+
+  return values;
+};
+
+const extractValueTuples = (valuesSection: string): string[] => {
+  const tuples: string[] = [];
+  let inString = false;
+  let inTuple = false;
+  let tupleStart = -1;
+
+  for (let i = 0; i < valuesSection.length; i++) {
+    const char = valuesSection[i];
+
+    if (inString) {
+      if (char === "'") {
+        if (i + 1 < valuesSection.length && valuesSection[i + 1] === "'") {
+          i++; // Skip escaped quote ''
+        } else {
+          inString = false;
+        }
+      }
+    } else {
+      if (char === "'") {
+        inString = true;
+      } else if (char === '(' && !inTuple) {
+        inTuple = true;
+        tupleStart = i + 1;
+      } else if (char === ')' && inTuple) {
+        inTuple = false;
+        tuples.push(valuesSection.substring(tupleStart, i));
+      }
+    }
+  }
+
+  return tuples;
+};
+
+const removeSQLComments = (sql: string): string => {
+  let result = '';
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let i = 0;
+
+  while (i < sql.length) {
+    const char = sql[i];
+    const nextChar = sql[i + 1];
+
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+        result += '\n';
+      }
+      i++;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === '*' && nextChar === '/') {
+        inBlockComment = false;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    if (inString) {
+      result += char;
+      if (char === "'") {
+        if (nextChar === "'") {
+          result += "'";
+          i += 2;
+          continue;
+        } else {
+          inString = false;
+        }
+      }
+      i++;
+      continue;
+    }
+
+    if (char === '-' && nextChar === '-') {
+      inLineComment = true;
+      i += 2;
+      continue;
+    }
+
+    if (char === '/' && nextChar === '*') {
+      inBlockComment = true;
+      i += 2;
+      continue;
+    }
+
+    if (char === "'") {
+      inString = true;
+      result += char;
+      i++;
+      continue;
+    }
+
+    result += char;
+    i++;
+  }
+
+  return result;
+};
+
+const splitSQLStatements = (sql: string): string[] => {
+  const cleanSql = removeSQLComments(sql);
+  const statements: string[] = [];
+  let current = '';
+  let inString = false;
+  let i = 0;
+
+  while (i < cleanSql.length) {
+    const char = cleanSql[i];
+
+    if (inString) {
+      current += char;
+      if (char === "'") {
+        if (i + 1 < cleanSql.length && cleanSql[i + 1] === "'") {
+          current += "'";
+          i += 2;
+          continue;
+        } else {
+          inString = false;
+        }
+      }
+    } else {
+      if (char === "'") {
+        inString = true;
+        current += char;
+      } else if (char === ';') {
+        if (current.trim()) {
+          statements.push(current.trim());
+        }
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    i++;
+  }
+  if (current.trim()) {
+    statements.push(current.trim());
+  }
+  return statements;
+};
+
+const parseSQLBackup = (sqlText: string): Record<string, Record<string, any>[]> => {
+  const result: Record<string, Record<string, any>[]> = {};
+  const statements = splitSQLStatements(sqlText);
+
+  for (const stmt of statements) {
+    if (!stmt.trim()) continue;
+
+    const match = /^INSERT\s+INTO\s+(?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+|["][^"]+["]|[`][^`]+[`])\s*\(([^)]+)\)\s*VALUES\s*([\s\S]*)$/i.exec(stmt.trim());
+    if (!match) continue;
+
+    const rawTable = match[1].trim().replace(/^["`']|["`']$/g, '').toLowerCase();
+    const columnsStr = match[2];
+    let valuesSection = match[3].trim();
+
+    const onConflictIdx = valuesSection.search(/\s+ON\s+CONFLICT/i);
+    if (onConflictIdx !== -1) {
+      valuesSection = valuesSection.substring(0, onConflictIdx).trim();
+    }
+
+    const columns = columnsStr.split(',').map(c => c.trim().replace(/^["`']|["`']$/g, ''));
+    const tuples = extractValueTuples(valuesSection);
+
+    for (const tupleStr of tuples) {
+      const values = parseSQLTupleValues(tupleStr);
+      if (columns.length > 0 && values.length === columns.length) {
+        const rowObj: Record<string, any> = {};
+        for (let i = 0; i < columns.length; i++) {
+          rowObj[columns[i]] = values[i];
+        }
+        if (!result[rawTable]) {
+          result[rawTable] = [];
+        }
+        result[rawTable].push(rowObj);
+      }
+    }
+  }
+
+  return result;
+};
