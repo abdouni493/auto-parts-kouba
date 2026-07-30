@@ -52,7 +52,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { Label } from '@/components/ui/label';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { supabase, getInvoices, getEmployeeNameById } from '@/lib/supabaseClient';
+import { supabase, getInvoices, getEmployeeNameById, restoreStockForSale } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface Invoice {
@@ -788,12 +788,31 @@ export default function Sales() {
 
   const handleDeleteInvoice = async (invoiceId: number) => {
     try {
+      // The POS now removes the sold quantities from the stock, so deleting a
+      // sale has to put them back before the invoice (and its items) are gone.
+      const { data: soldItems } = await supabase
+        .from('invoice_items')
+        .select('product_id, quantity')
+        .eq('invoice_id', invoiceId);
+
       const { error } = await supabase
         .from('invoices')
         .delete()
         .eq('id', invoiceId);
 
       if (error) throw error;
+
+      if (soldItems && soldItems.length > 0) {
+        try {
+          await restoreStockForSale(
+            soldItems
+              .filter((i: any) => i.product_id)
+              .map((i: any) => ({ product_id: i.product_id, quantity: Number(i.quantity) || 0 }))
+          );
+        } catch (stockError) {
+          console.error('Stock could not be restored after deletion:', stockError);
+        }
+      }
 
       toast({
         title: language === 'ar' ? 'تم الحذف' : 'Supprimée',

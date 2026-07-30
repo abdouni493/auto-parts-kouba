@@ -38,6 +38,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import {
   supabase,
+  getProducts,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -111,19 +112,24 @@ export default function WorkerInventory() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showProductDetails, setShowProductDetails] = useState(false);
 
+  // Client-side pagination: thousands of animated rows would freeze the page.
+  const [page, setPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 50;
+
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [productsRes, suppliersRes, categoriesRes, storesRes, shelvingsRes] = await Promise.all([
-        supabase.from('products').select('*').eq('is_active', true),
+      // Paginated: a plain select would stop at 1000 products.
+      const [allProducts, suppliersRes, categoriesRes, storesRes, shelvingsRes] = await Promise.all([
+        getProducts(),
         supabase.from('suppliers').select('*').eq('is_active', true),
         supabase.from('categories').select('*'),
         supabase.from('stores').select('*').eq('is_active', true),
         supabase.from('shelvings').select('*').eq('is_active', true),
       ]);
-      setProducts(productsRes.data || []);
+      setProducts(allProducts || []);
       setSuppliers(suppliersRes.data || []);
       setCategories(categoriesRes.data || []);
       setStores(storesRes.data || []);
@@ -142,10 +148,12 @@ export default function WorkerInventory() {
   };
 
   const filteredProducts = products.filter((p) => {
+    const term = searchTerm.trim().toLowerCase();
     const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.barcode && p.barcode.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (p.brand && p.brand.toLowerCase().includes(searchTerm.toLowerCase()));
+      !term ||
+      p.name.toLowerCase().includes(term) ||
+      (p.barcode && p.barcode.toLowerCase().includes(term)) ||
+      (p.brand && p.brand.toLowerCase().includes(term));
     const matchesCategory = filterCategory === 'all' || p.category_id === filterCategory;
     const matchesStore = filterStore === 'all' || p.store_id === filterStore;
     const status = getStockStatus(p.current_quantity, p.min_quantity);
@@ -155,6 +163,17 @@ export default function WorkerInventory() {
       filterStock === 'out' ? status === 'out' : true;
     return matchesSearch && matchesCategory && matchesStore && matchesStock;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedProducts = filteredProducts.slice(
+    (currentPage - 1) * PRODUCTS_PER_PAGE,
+    currentPage * PRODUCTS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, filterCategory, filterStock, filterStore]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-emerald-50 p-6">
@@ -258,7 +277,7 @@ export default function WorkerInventory() {
             </thead>
             <tbody>
               <AnimatePresence>
-                {filteredProducts.map((product, idx) => {
+                {pagedProducts.map((product, idx) => {
                   const status = getStockStatus(product.current_quantity, product.min_quantity);
                   return (
                     <motion.tr
@@ -326,6 +345,22 @@ export default function WorkerInventory() {
         </motion.div>
       )}
 
+      {/* Pagination */}
+      {!loading && filteredProducts.length > 0 && (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">
+          <p className="text-sm text-slate-600">
+            {`Affichage ${(currentPage - 1) * PRODUCTS_PER_PAGE + 1}–${Math.min(currentPage * PRODUCTS_PER_PAGE, filteredProducts.length)} sur ${filteredProducts.length} produits (total: ${products.length})`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="rounded-lg" disabled={currentPage <= 1} onClick={() => setPage(1)}>⏮️</Button>
+            <Button variant="outline" size="sm" className="rounded-lg" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>◀ Précédent</Button>
+            <span className="text-sm font-semibold text-slate-700 px-2">{currentPage} / {totalPages}</span>
+            <Button variant="outline" size="sm" className="rounded-lg" disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)}>Suivant ▶</Button>
+            <Button variant="outline" size="sm" className="rounded-lg" disabled={currentPage >= totalPages} onClick={() => setPage(totalPages)}>⏭️</Button>
+          </div>
+        </div>
+      )}
+
       {/* Add / Edit Product Dialog */}
       <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); if (!o) setEditingProduct(null); }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -360,17 +395,33 @@ export default function WorkerInventory() {
                   shelving_line: formData.shelving_line || null,
                 };
                 if (editingProduct) {
-                  await updateProduct(editingProduct.id, payload);
+                  const saved = await updateProduct(editingProduct.id, payload);
+                  setProducts((prev) => prev.map((p) => (p.id === saved.id ? { ...p, ...saved } : p)));
                   toast({ title: '✅ Produit mis à jour' });
                 } else {
-                  await createProduct(payload);
-                  toast({ title: '✅ Produit ajouté avec succès' });
+                  const created = await createProduct(payload);
+                  // Put the new product on top and clear the filters so the
+                  // worker can actually see what was just created.
+                  setProducts((prev) => [created, ...prev]);
+                  setSearchTerm('');
+                  setFilterCategory('all');
+                  setFilterStock('all');
+                  setFilterStore('all');
+                  setPage(1);
+                  toast({
+                    title: '✅ Produit ajouté avec succès',
+                    description: `« ${created.name} » est disponible dans le stock`,
+                  });
                 }
                 setDialogOpen(false);
                 setEditingProduct(null);
-                loadData();
               } catch (err: any) {
-                toast({ title: '❌ Erreur', description: err.message, variant: 'destructive' });
+                console.error('Product save failed:', err);
+                toast({
+                  title: '❌ Erreur',
+                  description: err?.message || 'Enregistrement impossible',
+                  variant: 'destructive',
+                });
               }
             }}
             onAddSupplier={async (name) => {
@@ -528,7 +579,7 @@ interface ProductFormProps {
   categories: Category[];
   stores: Store[];
   shelvings: Shelving[];
-  onSave: (data: any) => void;
+  onSave: (data: any) => void | Promise<void>;
   onAddSupplier: (name: string) => void;
   onAddCategory: (name: string, description: string) => void;
   onAddStore: (name: string) => void;
@@ -553,12 +604,14 @@ function ProductForm({
     initial_quantity: product?.initial_quantity || 0,
     current_quantity: product?.current_quantity || 0,
     min_quantity: product?.min_quantity || 0,
-    store_id: product?.store_id || '',
+    // Without a magasin the product never appears in the Point de Vente.
+    store_id: product?.store_id || (stores.length === 1 ? stores[0].id : ''),
     amount_paid: product?.amount_paid || 0,
     shelving_location: product?.shelving_location || '',
     shelving_line: product?.shelving_line || 1,
   });
 
+  const [saving, setSaving] = useState(false);
   const [totalPrice, setTotalPrice] = useState(product ? product.buying_price * product.initial_quantity : 0);
   const [remaining, setRemaining] = useState(totalPrice);
 
@@ -917,12 +970,28 @@ function ProductForm({
       )}
 
       {/* Save button */}
-      <div className="flex gap-3 pt-4 border-t border-slate-200">
+      <div className="space-y-2 pt-4 border-t border-slate-200">
+        {!formData.name.trim() && (
+          <p className="text-sm text-red-600 font-medium">⚠️ Le nom du produit est obligatoire</p>
+        )}
+        {formData.name.trim() && !formData.store_id && (
+          <p className="text-sm text-amber-600 font-medium">
+            ⚠️ Choisissez un magasin : sans magasin, le produit n'apparaîtra pas dans le Point de Vente
+          </p>
+        )}
         <Button
-          onClick={() => onSave(formData)}
-          className="flex-1 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-lg h-11"
+          disabled={saving || !formData.name.trim() || !formData.store_id}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              await onSave(formData);
+            } finally {
+              setSaving(false);
+            }
+          }}
+          className="w-full bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-lg h-11 disabled:opacity-60"
         >
-          💾 Enregistrer
+          {saving ? '⏳ …' : '💾 Enregistrer'}
         </Button>
       </div>
     </div>

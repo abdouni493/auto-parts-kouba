@@ -55,7 +55,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase, getProducts, getStores, getEmployeeNameById } from '@/lib/supabaseClient';
+import { supabase, getProducts, getStores, getEmployeeNameById, decreaseStockForSale } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface Product {
@@ -169,9 +169,12 @@ export default function POS() {
       setIsStorePinned(savedPinned);
 
       if (data.length > 0) {
-        if (savedPinned && savedStoreId && data.some((s) => s.id === savedStoreId)) {
+        const savedIsValid =
+          savedStoreId === 'all' || data.some((s) => s.id === savedStoreId);
+
+        if (savedPinned && savedStoreId && savedIsValid) {
           setSelectedStore(savedStoreId);
-        } else if (!savedStoreId || !data.some((s) => s.id === savedStoreId)) {
+        } else if (!savedStoreId || !savedIsValid) {
           setSelectedStore(data[0].id);
         }
       }
@@ -266,7 +269,7 @@ export default function POS() {
   // Search with store filtering
   useEffect(() => {
     const handler = setTimeout(() => {
-      const storeProducts = selectedStore 
+      const storeProducts = selectedStore && selectedStore !== 'all'
         ? products.filter(p => p.store_id === selectedStore)
         : products;
 
@@ -313,6 +316,13 @@ export default function POS() {
       searchInputRef.current.focus();
     }
   }, []);
+
+  // The POS can hold thousands of products; rendering them all at once makes
+  // the page unusable, so only the first slice is drawn and the cashier
+  // narrows the list with the search box.
+  const POS_VISIBLE_LIMIT = 100;
+  const visibleProducts = filteredProducts.slice(0, POS_VISIBLE_LIMIT);
+  const hiddenProductsCount = filteredProducts.length - visibleProducts.length;
 
   // Calculations
   const subtotal = cart.reduce((sum, item) => sum + (item.product.selling_price * item.quantity), 0);
@@ -451,6 +461,20 @@ export default function POS() {
 
       if (itemsError) throw itemsError;
 
+      // Take the sold quantities out of the stock. Without this the invoice
+      // was created but products.current_quantity never moved.
+      const newQuantities = await decreaseStockForSale(
+        cart.map(({ product, quantity }) => ({ product_id: product.id, quantity }))
+      );
+
+      setProducts(prev =>
+        prev.map(p =>
+          newQuantities[p.id] !== undefined
+            ? { ...p, current_quantity: newQuantities[p.id] }
+            : p
+        )
+      );
+
       const fetchedInvoice: SaleInvoice = {
         id: createdInvoice.id,
         type: 'sale',
@@ -472,11 +496,13 @@ export default function POS() {
       setPaymentDialog(false);
       fetchProducts();
       setPrintConfirmationDialog(true);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error completing sale:', error);
       toast({
         title: language === 'ar' ? 'خطأ' : 'Erreur',
-        description: language === 'ar' ? 'فشل في إتمام عملية البيع.' : 'Échec de la finalisation de la vente.',
+        description:
+          error?.message ||
+          (language === 'ar' ? 'فشل في إتمام عملية البيع.' : 'Échec de la finalisation de la vente.'),
         variant: 'destructive'
       });
     }
@@ -588,6 +614,11 @@ export default function POS() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-xl">
+                {/* Lets the admin reach the products that are not attached to
+                    a magasin — they would be invisible otherwise. */}
+                <SelectItem value="all" className="text-base">
+                  🏬 {language === 'ar' ? 'كل المتاجر' : 'Tous les magasins'}
+                </SelectItem>
                 {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id} className="text-base">
                     🏪 {store.name}
@@ -713,7 +744,7 @@ export default function POS() {
                         </thead>
                         <tbody>
                           <AnimatePresence>
-                            {filteredProducts.map((product, idx) => {
+                            {visibleProducts.map((product, idx) => {
                               const isLowStock = product.current_quantity < product.min_quantity;
                               return (
                                 <motion.tr
@@ -786,6 +817,14 @@ export default function POS() {
                           </AnimatePresence>
                         </tbody>
                       </table>
+
+                      {hiddenProductsCount > 0 && (
+                        <div className="px-4 py-3 text-center text-sm text-slate-600 dark:text-slate-300 bg-purple-50 dark:bg-slate-800 border-t border-purple-200 dark:border-purple-700">
+                          {language === 'ar'
+                            ? `+ ${hiddenProductsCount} منتج آخر — استخدم البحث لتضييق النتائج`
+                            : `+ ${hiddenProductsCount} autres produits — affinez la recherche pour les afficher`}
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>

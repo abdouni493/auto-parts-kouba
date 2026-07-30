@@ -57,6 +57,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
 import {
   supabase,
+  getProducts,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -260,6 +261,10 @@ export default function Inventory() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showProductDetails, setShowProductDetails] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
+  // Rendering several thousand animated rows at once freezes the page, so the
+  // list is paginated client-side.
+  const [page, setPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 50;
 
   // ================= LOAD DATA =================
   useEffect(() => {
@@ -269,22 +274,23 @@ export default function Inventory() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [productsResponse, suppliersResponse, categoriesResponse, storesResponse, shelvingsResponse] =
+      // getProducts() pages through the table, so the list is complete even
+      // with several thousand articles (a plain select stops at 1000 rows).
+      const [allProducts, suppliersResponse, categoriesResponse, storesResponse, shelvingsResponse] =
         await Promise.all([
-          supabase.from('products').select('*').eq('is_active', true),
+          getProducts(),
           supabase.from('suppliers').select('*').eq('is_active', true),
           supabase.from('categories').select('*'),
           supabase.from('stores').select('*').eq('is_active', true),
           supabase.from('shelvings').select('*').eq('is_active', true),
         ]);
 
-      if (productsResponse.error) throw productsResponse.error;
       if (suppliersResponse.error) throw suppliersResponse.error;
       if (categoriesResponse.error) throw categoriesResponse.error;
       if (storesResponse.error) throw storesResponse.error;
       if (shelvingsResponse.error) throw shelvingsResponse.error;
 
-      setProducts(productsResponse.data || []);
+      setProducts(allProducts || []);
       setSuppliers(suppliersResponse.data || []);
       setCategories(categoriesResponse.data || []);
       setStores(storesResponse.data || []);
@@ -322,9 +328,12 @@ export default function Inventory() {
   };
 
   const filteredProducts = products.filter((p) => {
+    const term = searchTerm.trim().toLowerCase();
     const matchesSearch =
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.barcode && p.barcode.toLowerCase().includes(searchTerm.toLowerCase()));
+      !term ||
+      p.name.toLowerCase().includes(term) ||
+      (p.barcode && p.barcode.toLowerCase().includes(term)) ||
+      (p.brand && p.brand.toLowerCase().includes(term));
 
     const matchesCategory = filterCategory === 'all' || !filterCategory || p.category_id === filterCategory;
     const matchesStore = filterStore === 'all' || !filterStore || p.store_id === filterStore;
@@ -336,6 +345,18 @@ export default function Inventory() {
 
     return matchesSearch && matchesCategory && matchesStore && matchesStock;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedProducts = filteredProducts.slice(
+    (currentPage - 1) * PRODUCTS_PER_PAGE,
+    currentPage * PRODUCTS_PER_PAGE
+  );
+
+  // Any change of filter sends the user back to the first page.
+  useEffect(() => {
+    setPage(1);
+  }, [searchTerm, filterCategory, filterStock, filterStore]);
 
   // ================= RENDER =================
   return (
@@ -436,9 +457,21 @@ export default function Inventory() {
           </Button>
         </div>
 
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            // Closing the dialog must forget the product being edited,
+            // otherwise the next "Ajouter Produit" would edit it instead of
+            // creating a new one.
+            if (!open) setEditingProduct(null);
+          }}
+        >
           <DialogTrigger asChild>
-            <Button className="h-11 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-xl shadow-lg hover:shadow-xl transition-all text-base font-semibold">
+            <Button
+              onClick={() => setEditingProduct(null)}
+              className="h-11 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-xl shadow-lg hover:shadow-xl transition-all text-base font-semibold"
+            >
               ➕ {getText('add_product', language)}
             </Button>
           </DialogTrigger>
@@ -484,7 +517,10 @@ export default function Inventory() {
                   };
 
                   if (editingProduct) {
-                    await updateProduct(editingProduct.id, validProductData);
+                    const saved = await updateProduct(editingProduct.id, validProductData);
+                    setProducts((prev) =>
+                      prev.map((p) => (p.id === saved.id ? { ...p, ...saved } : p))
+                    );
                     toast({
                       title: getText('product_updated', language),
                       description: language === 'ar' ? 'تم تحديث المنتج' : 'Le produit a été mis à jour',
@@ -493,21 +529,30 @@ export default function Inventory() {
                     // Create product without automatic invoice creation
                     // Initial quantities are set directly in the product fields
                     const createdProduct = await createProduct(validProductData);
-                    
+
+                    // Show the new product straight away: put it at the top of
+                    // the list and clear the filters that would hide it.
+                    setProducts((prev) => [createdProduct, ...prev]);
+                    setSearchTerm('');
+                    setFilterCategory('all');
+                    setFilterStock('all');
+                    setFilterStore('all');
+                    setPage(1);
+
                     toast({
                       title: getText('product_added', language),
-                      description: (language === 'ar'
-                        ? 'تمت إضافة المنتج بنجاح'
-                        : 'Le produit a été ajouté avec succès'),
+                      description: language === 'ar'
+                        ? `تمت إضافة « ${createdProduct.name} » بنجاح`
+                        : `« ${createdProduct.name} » a été ajouté avec succès`,
                     });
                   }
                   setDialogOpen(false);
                   setEditingProduct(null);
-                  loadData();
                 } catch (err: any) {
+                  console.error('Product save failed:', err);
                   toast({
                     title: getText('error', language),
-                    description: err.message,
+                    description: err?.message || 'Enregistrement impossible',
                     variant: 'destructive',
                   });
                 }
@@ -603,7 +648,7 @@ export default function Inventory() {
             </thead>
             <tbody>
               <AnimatePresence>
-                {filteredProducts.map((product, idx) => {
+                {pagedProducts.map((product, idx) => {
                   const status = getStockStatus(product.current_quantity, product.min_quantity);
                   const statusColor =
                     status === 'ok'
@@ -706,7 +751,7 @@ export default function Inventory() {
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
         >
           <AnimatePresence>
-            {filteredProducts.map((product) => {
+            {pagedProducts.map((product) => {
               const status = getStockStatus(product.current_quantity, product.min_quantity);
               const statusColor =
                 status === 'ok'
@@ -906,6 +951,59 @@ export default function Inventory() {
         </motion.div>
       )}
 
+      {/* Pagination */}
+      {!loading && filteredProducts.length > 0 && (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3">
+          <p className="text-sm text-slate-600">
+            {language === 'ar'
+              ? `عرض ${(currentPage - 1) * PRODUCTS_PER_PAGE + 1}–${Math.min(currentPage * PRODUCTS_PER_PAGE, filteredProducts.length)} من ${filteredProducts.length} منتج (المجموع: ${products.length})`
+              : `Affichage ${(currentPage - 1) * PRODUCTS_PER_PAGE + 1}–${Math.min(currentPage * PRODUCTS_PER_PAGE, filteredProducts.length)} sur ${filteredProducts.length} produits (total: ${products.length})`}
+          </p>
+
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              disabled={currentPage <= 1}
+              onClick={() => setPage(1)}
+            >
+              ⏮️
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              disabled={currentPage <= 1}
+              onClick={() => setPage(currentPage - 1)}
+            >
+              ◀ {language === 'ar' ? 'السابق' : 'Précédent'}
+            </Button>
+            <span className="text-sm font-semibold text-slate-700 px-2">
+              {currentPage} / {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage(currentPage + 1)}
+            >
+              {language === 'ar' ? 'التالي' : 'Suivant'} ▶
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage(totalPages)}
+            >
+              ⏭️
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deleteDialog} onOpenChange={(open) => !open && setDeleteDialog(null)}>
         <AlertDialogContent>
@@ -1071,7 +1169,7 @@ interface ProductFormProps {
   categories: Category[];
   stores: Store[];
   shelvings: Shelving[];
-  onSave: (data: any) => void;
+  onSave: (data: any) => void | Promise<void>;
   onAddSupplier: (name: string) => void;
   onAddCategory: (name: string, description: string) => void;
   onAddStore: (name: string) => void;
@@ -1108,12 +1206,15 @@ function ProductForm({
     initial_quantity: product?.initial_quantity || 0,
     current_quantity: product?.current_quantity || 0,
     min_quantity: product?.min_quantity || 0,
-    store_id: product?.store_id || '',
+    // A product without a magasin never shows up in the POS (the POS lists
+    // the products of one magasin), so a single-store shop gets it by default.
+    store_id: product?.store_id || (stores.length === 1 ? stores[0].id : ''),
     amount_paid: product?.amount_paid || 0,
     shelving_location: product?.shelving_location || '',
     shelving_line: product?.shelving_line || 1,
   });
 
+  const [saving, setSaving] = useState(false);
   const [totalPrice, setTotalPrice] = useState(
     product ? product.buying_price * product.initial_quantity : 0
   );
@@ -1732,17 +1833,38 @@ function ProductForm({
       )}
 
       {/* Action Buttons */}
-      <div className="flex gap-3 pt-4 border-t border-slate-200">
-        <Button
-          onClick={() => onSave({
-            ...formData,
-            // Note: amount_paid and remaining_debt are handled separately in invoice tracking
-            // They should not be sent to products table
-          })}
-          className="flex-1 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-lg h-11"
-        >
-          {getText('save', language)}
-        </Button>
+      <div className="space-y-2 pt-4 border-t border-slate-200">
+        {!formData.name.trim() && (
+          <p className="text-sm text-red-600 font-medium">
+            ⚠️ {language === 'ar' ? 'اسم المنتج مطلوب' : 'Le nom du produit est obligatoire'}
+          </p>
+        )}
+        {formData.name.trim() && !formData.store_id && (
+          <p className="text-sm text-amber-600 font-medium">
+            ⚠️ {language === 'ar'
+              ? 'اختر متجرًا: بدون متجر لن يظهر المنتج في نقطة البيع'
+              : 'Choisissez un magasin : sans magasin, le produit n\'apparaîtra pas dans le Point de Vente'}
+          </p>
+        )}
+        <div className="flex gap-3">
+          <Button
+            disabled={saving || !formData.name.trim() || !formData.store_id}
+            onClick={async () => {
+              // Guard against a double click creating the product twice.
+              setSaving(true);
+              try {
+                // Note: amount_paid and remaining_debt are handled separately in
+                // invoice tracking. They should not be sent to products table.
+                await onSave({ ...formData });
+              } finally {
+                setSaving(false);
+              }
+            }}
+            className="flex-1 bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white rounded-lg h-11 disabled:opacity-60"
+          >
+            {saving ? '⏳ …' : getText('save', language)}
+          </Button>
+        </div>
       </div>
     </div>
   );

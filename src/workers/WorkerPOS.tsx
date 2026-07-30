@@ -50,22 +50,21 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase, getProducts, getStores, getEmployeeByEmail, ensureValidSession, getEmployeeStores } from '@/lib/supabaseClient';
+import {
+  supabase,
+  getProductsByStore,
+  getEmployeeByEmail,
+  ensureValidSession,
+  getEmployeeStores,
+  decreaseStockForSale,
+} from '@/lib/supabaseClient';
 import { formatCurrency } from '@/lib/utils';
 
-// FIXED: Use correct column names and proper filtering
+// Paginated fetch: a magasin with more than 1000 products used to be
+// truncated by PostgREST, so the missing articles were unsearchable here.
 const fetchWorkerProducts = async (storeId: string) => {
   try {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('store_id', storeId);
-    
-    if (error) {
-      console.error('Query error:', error);
-      return [];
-    }
-    return data || [];
+    return await getProductsByStore(storeId);
   } catch (err) {
     console.error('Fetch error:', err);
     return [];
@@ -297,12 +296,22 @@ export default function WorkerPOS() {
 
   // --- Search Filter ---
   useEffect(() => {
-    const filtered = products.filter((product) =>
-      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.barcode.includes(searchQuery)
-    );
+    const term = searchQuery.trim().toLowerCase();
+    const filtered = term
+      ? products.filter(
+          (product) =>
+            product.name?.toLowerCase().includes(term) ||
+            product.barcode?.toLowerCase().includes(term) ||
+            product.brand?.toLowerCase().includes(term)
+        )
+      : products;
     setFilteredProducts(filtered);
   }, [searchQuery, products]);
+
+  // Only a slice is rendered: drawing thousands of rows freezes the POS.
+  const POS_VISIBLE_LIMIT = 100;
+  const visibleProducts = filteredProducts.slice(0, POS_VISIBLE_LIMIT);
+  const hiddenProductsCount = filteredProducts.length - visibleProducts.length;
 
   // --- Cart Functions ---
   const addToCart = (product: Product) => {
@@ -441,6 +450,8 @@ export default function WorkerPOS() {
         .select()
         .single();
 
+      if (invoiceRes.error) throw invoiceRes.error;
+
       if (invoiceRes.data?.id) {
         const invoiceId = invoiceRes.data.id;
 
@@ -454,7 +465,22 @@ export default function WorkerPOS() {
           total_price: item.total
         }));
 
-        await supabase.from('invoice_items').insert(items);
+        const { error: itemsError } = await supabase.from('invoice_items').insert(items);
+        if (itemsError) throw itemsError;
+
+        // Remove the sold quantities from the stock of the magasin.
+        const newQuantities = await decreaseStockForSale(
+          cart.map((item) => ({ product_id: item.product.id, quantity: item.quantity }))
+        );
+
+        // Reflect the new stock immediately in the product list.
+        setProducts((prev) =>
+          prev.map((p) =>
+            newQuantities[p.id] !== undefined
+              ? { ...p, current_quantity: newQuantities[p.id] }
+              : p
+          )
+        );
 
         setLastSaleInvoice(invoiceRes.data);
         setPrintConfirmationDialog(true);
@@ -476,11 +502,11 @@ export default function WorkerPOS() {
           description: `Facture #${invoiceId} enregistrée avec succès.`
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error completing payment:', error);
       toast({
         title: 'Erreur',
-        description: 'Impossible de traiter le paiement.',
+        description: error?.message || 'Impossible de traiter le paiement.',
         variant: 'destructive'
       });
     }
@@ -585,7 +611,7 @@ export default function WorkerPOS() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredProducts.length > 0 ? filteredProducts.map((product, idx) => (
+                  {visibleProducts.length > 0 ? visibleProducts.map((product, idx) => (
                     <tr key={product.id}
                       onClick={() => product.current_quantity > 0 && addToCart(product)}
                       className={`border-b border-slate-100 dark:border-slate-800 transition-colors cursor-pointer
@@ -625,9 +651,20 @@ export default function WorkerPOS() {
                       <td colSpan={6} className="text-center py-12 text-gray-500">📭 Aucun produit trouvé</td>
                     </tr>
                   )}
+                  {hiddenProductsCount > 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-3 text-sm text-slate-600 dark:text-slate-300 bg-blue-50 dark:bg-slate-800">
+                        + {hiddenProductsCount} autres produits — affinez la recherche pour les afficher
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
+
+            <p className="text-sm text-slate-600 dark:text-slate-400 px-1">
+              📦 {filteredProducts.length} produit(s) trouvé(s) — {products.length} en stock dans ce magasin
+            </p>
           </motion.div>
 
           {/* Cart Section */}

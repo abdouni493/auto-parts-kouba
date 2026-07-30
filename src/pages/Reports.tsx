@@ -28,7 +28,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase, getProducts } from '@/lib/supabaseClient';
 
 // --- Type Definitions ---
 interface ReportStats {
@@ -210,12 +210,8 @@ export default function Reports() {
         return invDate && invDate >= startDate && invDate <= endDate;
       });
 
-      // Fetch products
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('*');
-
-      if (productsError) throw productsError;
+      // Fetch products (paginated - a plain select returns at most 1000 rows)
+      const productsData = await getProducts({ activeOnly: false });
 
       // Fetch suppliers
       const { data: suppliersData, error: suppliersError } = await supabase

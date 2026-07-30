@@ -31,7 +31,7 @@ import { formatCurrency } from '@/lib/utils';
 import { Progress } from "@/components/ui/progress";
 import { Link } from "react-router-dom";
 import { ArrowRight } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient';
+import { supabase, getProducts } from '@/lib/supabaseClient';
 
 // Enhanced StatCard with more details
 const StatCard = ({ 
@@ -252,8 +252,10 @@ export default function Dashboard() {
     setHasError(false);
     try {
       // Fetch data from Supabase
-      const [productsRes, suppliersRes, customersRes, employeesRes, invoicesRes] = await Promise.all([
-        supabase.from('products').select('*').eq('is_active', true),
+      // Products are paginated: a plain select stops at 1000 rows, which made
+      // the totals and the stock alerts wrong on a large catalogue.
+      const [allProducts, suppliersRes, customersRes, employeesRes, invoicesRes] = await Promise.all([
+        getProducts(),
         supabase.from('suppliers').select('*').eq('is_active', true),
         supabase.from('customers').select('*'),
         supabase.from('employees').select('*').eq('is_active', true),
@@ -261,7 +263,7 @@ export default function Dashboard() {
       ]);
 
       // Get low stock products
-      const lowStock = (productsRes.data || [])
+      const lowStock = (allProducts || [])
         .filter(p => p.current_quantity <= p.min_quantity)
         .sort((a, b) => a.current_quantity - b.current_quantity);
       setLowStockProducts(lowStock);
@@ -275,7 +277,7 @@ export default function Dashboard() {
 
       // Create stats object
       const dashboardStats = {
-        totalProducts: productsRes.data?.length || 0,
+        totalProducts: allProducts?.length || 0,
         lowStockItems: lowStockCount,
         completedSales: saleInvoices.length,
         pendingPurchases: (invoicesRes.data || []).filter(inv => inv.type === 'purchase' && inv.status === 'pending').length,

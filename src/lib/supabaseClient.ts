@@ -5,33 +5,87 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJ
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ========== PAGINATION HELPER ==========
+// PostgREST (Supabase) never returns more than 1000 rows in a single request.
+// Every list screen used to call `.select('*')` once, so as soon as the shop
+// passed 1000 products the extra ones simply disappeared from the UI (they
+// were saved in the database, they were just never fetched). This helper
+// walks the table page by page until everything has been downloaded.
+export const PAGE_SIZE = 1000;
+
+export const fetchAllRows = async <T = any>(
+  buildQuery: (from: number, to: number) => any
+): Promise<T[]> => {
+  const rows: T[] = [];
+  let from = 0;
+
+  // Hard stop at 100 pages (100k rows) so a broken query can never spin forever.
+  for (let page = 0; page < 100; page++) {
+    const { data, error } = await buildQuery(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+
+    const batch = (data || []) as T[];
+    rows.push(...batch);
+
+    if (batch.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return rows;
+};
+
 // ========== USER MANAGEMENT ==========
 
-export const signUp = async (email: string, password: string, username: string) => {
+export const signUp = async (
+  email: string,
+  password: string,
+  username: string,
+  fullName?: string
+) => {
   try {
-    // Create auth user
+    const name = (fullName || username).trim();
+
+    // Create auth user. The `on_auth_user_created` trigger in Supabase
+    // creates the matching public.users profile with role = 'admin'.
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        data: {
+          username,
+          full_name: name,
+          role: 'admin',
+        },
+      },
     });
 
     if (authError) throw authError;
 
-    // Wait a moment for auth to be ready
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (!authData.session) {
+      // Email confirmation is still enabled on the project
+      throw new Error(
+        "Compte créé mais la confirmation d'email est activée. Désactivez « Confirm email » dans Supabase → Authentication → Providers → Email."
+      );
+    }
 
-    // Create user profile in users table
+    // Wait a moment for the trigger to insert the profile row
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Upsert the profile (no-op if the trigger already created it)
     const { data: userData, error: userError } = await supabase
       .from('users')
-      .insert([
-        {
-          id: authData.user?.id,
-          email,
-          username,
-          role: 'admin',
-          created_at: new Date().toISOString(),
-        },
-      ])
+      .upsert(
+        [
+          {
+            id: authData.user?.id,
+            email,
+            username,
+            full_name: name,
+            role: 'admin',
+          },
+        ],
+        { onConflict: 'id' }
+      )
       .select()
       .single();
 
@@ -40,7 +94,10 @@ export const signUp = async (email: string, password: string, username: string) 
       // Don't throw - user auth succeeded even if profile creation fails
     }
 
-    return { user: userData || { id: authData.user?.id, email }, authUser: authData.user };
+    return {
+      user: userData || { id: authData.user?.id, email, username, full_name: name, role: 'admin' },
+      authUser: authData.user,
+    };
   } catch (error) {
     console.error('Signup error:', error);
     throw error;
@@ -90,10 +147,19 @@ export const getCurrentUser = async () => {
 // NOTE: This requires proper error handling and may need backend function
 // For now, we store the credentials and let workers complete signup process
 
-export const createEmployeeAuthUser = async (email: string, password: string, username: string) => {
+export const createEmployeeAuthUser = async (
+  email: string,
+  password: string,
+  username: string,
+  fullName?: string
+) => {
+  // supabase.auth.signUp() signs the browser in as the newly created user.
+  // Keep the admin's session so we can put it back afterwards.
+  const { data: { session: adminSession } } = await supabase.auth.getSession();
+
   try {
     console.log('🔐 Creating Supabase auth account for worker:', email);
-    
+
     // Step 1: Create auth user
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
@@ -101,6 +167,7 @@ export const createEmployeeAuthUser = async (email: string, password: string, us
       options: {
         data: {
           username: username,
+          full_name: (fullName || username).trim(),
           role: 'employee',
           is_employee: true
         },
@@ -123,9 +190,12 @@ export const createEmployeeAuthUser = async (email: string, password: string, us
     // Wait a moment for the auth account to be fully created
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    // Step 2: Create user profile in users table
+    // Step 2: Create user profile in users table.
+    // The `on_auth_user_created` trigger normally does this already; the
+    // upsert below is a safety net and must run while the new worker's
+    // session is active (RLS on `users` only allows writing your own row).
     try {
-      const { data: userData, error: userError } = await supabase
+      const { error: userError } = await supabase
         .from('users')
         .upsert(
           [
@@ -133,8 +203,8 @@ export const createEmployeeAuthUser = async (email: string, password: string, us
               id: userId,
               email,
               username,
+              full_name: (fullName || username).trim(),
               role: 'employee',
-              created_at: new Date().toISOString(),
             },
           ],
           { onConflict: 'id' }
@@ -152,7 +222,7 @@ export const createEmployeeAuthUser = async (email: string, password: string, us
       console.warn('⚠️ Could not save user profile, but auth account exists');
     }
 
-    return { 
+    return {
       user: { id: userId, email, username },
       authUser: authData.user,
       message: '✅ Auth account created - ready to login'
@@ -160,20 +230,52 @@ export const createEmployeeAuthUser = async (email: string, password: string, us
   } catch (error: any) {
     console.error('❌ Failed to create employee auth user:', error);
     throw error;
+  } finally {
+    // Step 3: put the admin back in the driver's seat. signUp() replaced
+    // the browser session with the freshly created worker account.
+    if (adminSession) {
+      try {
+        const { data: { session: current } } = await supabase.auth.getSession();
+        if (current?.user?.id !== adminSession.user.id) {
+          await supabase.auth.setSession({
+            access_token: adminSession.access_token,
+            refresh_token: adminSession.refresh_token,
+          });
+          console.log('🔄 Admin session restored');
+        }
+      } catch (restoreErr) {
+        console.error('⚠️ Could not restore the admin session:', restoreErr);
+      }
+    }
   }
 };
 
 // ========== PRODUCTS ==========
 
-export const getProducts = async () => {
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .order('created_at', { ascending: false });
+/**
+ * Fetch products. Always paginated, so every product is returned no matter
+ * how many there are (1000, 5000, ...).
+ *
+ * @param options.storeId    only products of that magasin
+ * @param options.activeOnly only products with is_active = true (default true)
+ */
+export const getProducts = async (options: { storeId?: string; activeOnly?: boolean } = {}) => {
+  const { storeId, activeOnly = true } = options;
 
-  if (error) throw error;
-  return data;
+  return fetchAllRows<any>((from, to) => {
+    let query = supabase.from('products').select('*');
+
+    if (activeOnly) query = query.eq('is_active', true);
+    if (storeId) query = query.eq('store_id', storeId);
+
+    // A stable sort is required: without ORDER BY, Postgres may return the
+    // same row on two different pages and skip another one entirely.
+    return query.order('created_at', { ascending: false }).order('id').range(from, to);
+  });
 };
+
+/** Products of a single magasin (used by the POS screens). */
+export const getProductsByStore = async (storeId: string) => getProducts({ storeId });
 
 export const getProductById = async (id: string) => {
   const { data, error } = await supabase
@@ -186,26 +288,110 @@ export const getProductById = async (id: string) => {
   return data;
 };
 
+/**
+ * Normalise a product payload before it reaches the database.
+ * Empty strings are not valid uuid / numeric values for Postgres, and an
+ * empty barcode must be NULL (the column is UNIQUE — two empty strings
+ * would collide and the second insert would be rejected).
+ */
+const normalizeProductPayload = (product: any) => {
+  const emptyToNull = (v: any) =>
+    v === '' || v === undefined || v === null
+      ? null
+      : typeof v === 'string'
+        ? v.trim() || null
+        : v;
+
+  const num = (v: any, fallback = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  // Columns that must never receive an empty string (uuid / text unique).
+  const nullable = [
+    'barcode', 'brand', 'description', 'category_id', 'supplier_id',
+    'store_id', 'shelving_location', 'last_price_to_sell', 'shelving_line',
+  ];
+  const numeric = [
+    'buying_price', 'selling_price', 'margin_percent',
+    'initial_quantity', 'current_quantity', 'min_quantity', 'amount_paid',
+  ];
+
+  // Only the keys present in the input are touched, so a partial update
+  // never wipes the columns it did not mention.
+  const payload: Record<string, any> = { ...product };
+
+  if ('name' in payload) payload.name = String(payload.name ?? '').trim();
+
+  for (const key of nullable) {
+    if (key in payload) {
+      const value = emptyToNull(payload[key]);
+      payload[key] =
+        value !== null && (key === 'last_price_to_sell' || key === 'shelving_line')
+          ? num(value)
+          : value;
+    }
+  }
+
+  for (const key of numeric) {
+    if (key in payload) payload[key] = num(payload[key]);
+  }
+
+  // A product created with a stock of 20 must be sellable straight away.
+  if (payload.current_quantity == null && payload.initial_quantity != null) {
+    payload.current_quantity = num(payload.initial_quantity);
+  }
+
+  return payload;
+};
+
 export const createProduct = async (product: any) => {
+  const payload = normalizeProductPayload(product);
+
+  if (!payload.name) {
+    throw new Error('Le nom du produit est obligatoire.');
+  }
+
+  // A new product entered with an initial stock must be sellable right away.
+  if (!payload.current_quantity && payload.initial_quantity) {
+    payload.current_quantity = payload.initial_quantity;
+  }
+
   const { data, error } = await supabase
     .from('products')
-    .insert([product])
+    // is_active is explicit: the inventory screens filter on is_active = true,
+    // so a product inserted without it would be invisible everywhere.
+    .insert([{ ...payload, is_active: true }])
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (error.code === '23505' && String(error.message).includes('barcode')) {
+      throw new Error(
+        `Le code-barres « ${payload.barcode} » est déjà utilisé par un autre produit.`
+      );
+    }
+    console.error('createProduct failed:', error);
+    throw error;
+  }
+
   return data;
 };
 
 export const updateProduct = async (id: string, updates: any) => {
   const { data, error } = await supabase
     .from('products')
-    .update(updates)
+    .update(normalizeProductPayload(updates))
     .eq('id', id)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    if (error.code === '23505' && String(error.message).includes('barcode')) {
+      throw new Error('Ce code-barres est déjà utilisé par un autre produit.');
+    }
+    throw error;
+  }
   return data;
 };
 
@@ -217,6 +403,90 @@ export const deleteProduct = async (id: string) => {
 
   if (error) throw error;
 };
+
+// ========== STOCK MOVEMENTS ==========
+
+export interface StockMovementItem {
+  product_id: string;
+  quantity: number;
+}
+
+/**
+ * Apply a stock movement to `products.current_quantity`.
+ *
+ * `sign = -1` for a sale (stock leaves the magasin), `sign = +1` to put the
+ * stock back (a sale invoice is deleted / cancelled).
+ *
+ * The POS used to create the invoice and its items without ever touching the
+ * product rows, so the stock displayed in Gestion de Stock never moved.
+ *
+ * Returns the new quantity per product id so the caller can refresh its local
+ * state without re-downloading the whole catalogue.
+ */
+export const applyStockMovement = async (
+  items: StockMovementItem[],
+  sign: -1 | 1
+): Promise<Record<string, number>> => {
+  const updated: Record<string, number> = {};
+
+  // The same product can appear on several lines of one invoice.
+  const totals = new Map<string, number>();
+  for (const item of items) {
+    if (!item?.product_id) continue;
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
+    totals.set(item.product_id, (totals.get(item.product_id) || 0) + qty);
+  }
+
+  if (totals.size === 0) return updated;
+
+  const ids = [...totals.keys()];
+
+  // Read the quantities that are actually in the database right now, not the
+  // ones the screen had in memory (another cashier may have sold in between).
+  const { data: rows, error: readError } = await supabase
+    .from('products')
+    .select('id, current_quantity')
+    .in('id', ids);
+
+  if (readError) throw readError;
+
+  const results = await Promise.all(
+    (rows || []).map(async (row: any) => {
+      const delta = (totals.get(row.id) || 0) * sign;
+      const next = Math.max(0, (Number(row.current_quantity) || 0) + delta);
+
+      const { error } = await supabase
+        .from('products')
+        .update({ current_quantity: next, updated_at: new Date().toISOString() })
+        .eq('id', row.id);
+
+      return { id: row.id as string, next, error };
+    })
+  );
+
+  const failed = results.filter((r) => r.error);
+  for (const ok of results.filter((r) => !r.error)) {
+    updated[ok.id] = ok.next;
+  }
+
+  if (failed.length > 0) {
+    console.error('Stock update failed for:', failed);
+    throw new Error(
+      `Le stock de ${failed.length} produit(s) n'a pas pu être mis à jour.`
+    );
+  }
+
+  return updated;
+};
+
+/** Remove the sold quantities from the stock. */
+export const decreaseStockForSale = (items: StockMovementItem[]) =>
+  applyStockMovement(items, -1);
+
+/** Put the quantities back (deleted / cancelled sale). */
+export const restoreStockForSale = (items: StockMovementItem[]) =>
+  applyStockMovement(items, 1);
 
 // ========== SUPPLIERS ==========
 
@@ -632,17 +902,20 @@ export const saveWorkerPermissions = async (employeeId: string, permissions: Rec
 
 export const getDashboardStats = async () => {
   try {
-    const [products, invoices, employees] = await Promise.all([
-      supabase.from('products').select('*'),
-      supabase.from('invoices').select('*'),
-      supabase.from('employees').select('*'),
+    // head + count: the row cap (1000) does not apply to a count, so these
+    // totals stay correct for a catalogue of any size.
+    const [products, sales, purchases, employees] = await Promise.all([
+      supabase.from('products').select('id', { count: 'exact', head: true }),
+      supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('type', 'sale'),
+      supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('type', 'purchase'),
+      supabase.from('employees').select('id', { count: 'exact', head: true }),
     ]);
 
     return {
-      totalProducts: products.data?.length || 0,
-      totalSalesInvoices: invoices.data?.filter((i) => i.type === 'sale').length || 0,
-      totalPurchaseInvoices: invoices.data?.filter((i) => i.type === 'purchase').length || 0,
-      totalEmployees: employees.data?.length || 0,
+      totalProducts: products.count || 0,
+      totalSalesInvoices: sales.count || 0,
+      totalPurchaseInvoices: purchases.count || 0,
+      totalEmployees: employees.count || 0,
     };
   } catch (error) {
     console.error('Get dashboard stats error:', error);
@@ -873,9 +1146,9 @@ export const updateUserProfile = async (updates: { username?: string }) => {
 export const getSystemInfo = async () => {
   try {
     // Get database size (approximate)
-    const { data: products, error: productsError } = await supabase
+    const { count: productCount, error: productsError } = await supabase
       .from('products')
-      .select('id', { count: 'exact' });
+      .select('id', { count: 'exact', head: true });
 
     if (productsError) throw productsError;
 
@@ -883,7 +1156,7 @@ export const getSystemInfo = async () => {
     const lastBackup = localStorage.getItem('lastBackup') || 'Jamais';
 
     // Calculate approximate database size (rough estimate)
-    const dbSize = (products?.length || 0) * 1024; // Rough estimate: 1KB per product
+    const dbSize = (productCount || 0) * 1024; // Rough estimate: 1KB per product
 
     return {
       version: '1.0.0',
